@@ -74,19 +74,44 @@ import { AuthService } from '../../../core/services/auth.service';
                
                <div class="space-y-4">
                   @if (taskDetails()?.formSchemaJson?.fields?.length > 0) {
-                     <!-- AI Autofill Button -->
+                     <!-- AI Autofill Section -->
                      @if (isTaskPending()) {
-                       <div class="flex justify-end">
-                         <button (click)="aiAutofill()" [disabled]="isAiLoading()"
-                           class="flex items-center gap-2 rounded-lg border border-primary px-3 py-1.5 text-sm font-medium text-primary hover:bg-primary/10 transition-colors disabled:opacity-50">
-                           @if (isAiLoading()) {
-                             <lucide-icon [img]="LoaderIcon" [size]="16" class="animate-spin" />
-                             Analizando...
-                           } @else {
-                             <lucide-icon [img]="Wand2" [size]="16" />
-                             🪄 Autocompletar con IA
-                           }
-                         </button>
+                       <div class="rounded-lg border border-primary/20 bg-primary/5 p-3 space-y-2">
+                         <div class="flex items-center justify-between">
+                           <span class="text-xs font-semibold text-primary uppercase tracking-wider">🪄 Rellenar con IA</span>
+                           <div class="flex items-center gap-2">
+                             <button (click)="startNlpVoice()" [disabled]="isListeningNlp() || isNlpLoading()"
+                               class="flex items-center gap-1 rounded px-2 py-1 text-xs text-muted-foreground hover:text-primary hover:bg-primary/10 transition-colors disabled:opacity-50"
+                               title="Dictar descripción por voz">
+                               <lucide-icon [img]="MicIcon" [size]="13" [class.animate-pulse]="isListeningNlp()" [class.text-primary]="isListeningNlp()" />
+                               {{ isListeningNlp() ? 'Escuchando...' : 'Dictar' }}
+                             </button>
+                             <button (click)="aiAutofill()" [disabled]="isAiLoading()"
+                               class="flex items-center gap-1 rounded px-2 py-1 text-xs text-muted-foreground hover:text-primary hover:bg-primary/10 transition-colors disabled:opacity-50"
+                               title="Sugerir valores automáticamente">
+                               <lucide-icon [img]="Wand2" [size]="13" [class.animate-spin]="isAiLoading()" />
+                               {{ isAiLoading() ? 'Analizando...' : 'Auto-sugerir' }}
+                             </button>
+                           </div>
+                         </div>
+                         <div class="flex gap-2">
+                           <textarea
+                             [ngModel]="nlpText()"
+                             (ngModelChange)="nlpText.set($event)"
+                             rows="2"
+                             placeholder="Describe el trámite en lenguaje natural y presiona Rellenar... Ej: El solicitante Juan Pérez pide una licencia de 5 días desde el 01/05."
+                             class="flex-1 rounded-md border border-input bg-background px-2.5 py-1.5 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/30 resize-none"
+                           ></textarea>
+                           <button (click)="nlpAutofill()" [disabled]="isNlpLoading() || !nlpText().trim()"
+                             class="shrink-0 flex flex-col items-center justify-center gap-1 rounded-lg bg-primary px-3 py-2 text-xs font-medium text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-50">
+                             @if (isNlpLoading()) {
+                               <lucide-icon [img]="LoaderIcon" [size]="16" class="animate-spin" />
+                             } @else {
+                               <lucide-icon [img]="Wand2" [size]="16" />
+                             }
+                             Rellenar
+                           </button>
+                         </div>
                        </div>
                      }
                      @for (field of taskDetails()?.formSchemaJson?.fields; track field.name) {
@@ -142,7 +167,7 @@ import { AuthService } from '../../../core/services/auth.service';
                                      </tr>
                                    </thead>
                                    <tbody>
-                                     @for (row of (formData[field.name] || []); track $index; let ri = $index) {
+                                     @for (row of (formData[field.name] || []); track ri; let ri = $index) {
                                        <tr class="border-b border-border last:border-0 hover:bg-muted/20 transition-colors">
                                          @for (col of (field.columns || []); track col) {
                                            <td class="px-2 py-1.5">
@@ -298,6 +323,9 @@ export class EmployeeTaskDetailComponent implements OnInit {
   isSubmitting = signal<boolean>(false);
   showTaskCompletedModal = signal(false);
   isAiLoading = signal<boolean>(false);
+  nlpText = signal<string>('');
+  isNlpLoading = signal<boolean>(false);
+  isListeningNlp = signal<boolean>(false);
   listeningField = signal<string | null>(null);
 
   formData: Record<string, any> = {};
@@ -449,8 +477,87 @@ export class EmployeeTaskDetailComponent implements OnInit {
     });
   }
 
-  startVoiceForField(fieldName: string): void {
+  nlpAutofill(): void {
+    const text = this.nlpText().trim();
+    if (!text) return;
+    const details = this.taskDetails();
+    if (!details) return;
+    const fields: any[] = details.formSchemaJson?.fields ?? [];
+    if (fields.length === 0) { this.toast.error('El formulario no tiene campos definidos.'); return; }
+
+    const fieldDescriptions = fields.map((f: any) => `- ${f.name} (tipo: ${f.type || 'texto'}${f.type === 'grid' && f.columns?.length ? ', columnas: ' + f.columns.join(', ') : ''})`).join('\n');
+    const prompt = `Extrae información del siguiente texto para completar un formulario de gestión.\n\n` +
+      `Texto del usuario: "${text}"\n\n` +
+      `Campos a completar:\n${fieldDescriptions}\n\n` +
+      `Responde ÚNICAMENTE con un objeto JSON válido (sin markdown, sin explicaciones) donde las claves sean los nombres exactos de los campos y los valores correspondan a la información extraída del texto. ` +
+      `Para campos de tipo 'grid', el valor debe ser un array de objetos con las columnas como claves. ` +
+      `Para campos booleanos usa true o false. Para campos numéricos usa números.`;
+
+    const userRole = this.authService.getCurrentUserRole() || 'employee';
+    this.isNlpLoading.set(true);
+
+    this.aiChatService.getChatResponse({
+      user_role: userRole,
+      current_screen: 'employee-task-detail',
+      user_message: prompt,
+      screen_data: JSON.stringify({ instanceId: this.instanceId(), fields: fields.map((f: any) => f.name) })
+    }).subscribe({
+      next: (res) => {
+        try {
+          const jsonMatch = res.reply.match(/\{[\s\S]*\}/);
+          if (!jsonMatch) throw new Error('No JSON found');
+          const filled: Record<string, any> = JSON.parse(jsonMatch[0]);
+          fields.forEach((f: any) => {
+            if (f.name in filled) {
+              if (f.type === 'boolean') {
+                const v = String(filled[f.name]).toLowerCase();
+                this.formData[f.name] = v === 'true' || v === 'sí' || v === 'si' || v === 'confirmado' || v === 'aprobado';
+              } else if (f.type === 'number') {
+                this.formData[f.name] = Number(filled[f.name]) || 0;
+              } else if (f.type === 'grid') {
+                this.formData[f.name] = Array.isArray(filled[f.name]) ? filled[f.name] : [];
+              } else {
+                this.formData[f.name] = String(filled[f.name]);
+              }
+            }
+          });
+          this.nlpText.set('');
+          this.toast.success('Formulario rellenado a partir del texto');
+        } catch {
+          this.toast.error('La IA no pudo interpretar el texto. Intenta ser más específico.');
+        }
+        this.isNlpLoading.set(false);
+      },
+      error: () => {
+        this.toast.error('Error al consultar la IA. Intenta de nuevo.');
+        this.isNlpLoading.set(false);
+      }
+    });
+  }
+
+  startNlpVoice(): void {
     const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (!SR) { this.toast.error('Tu navegador no soporta reconocimiento de voz.'); return; }
+    if (this.isListeningNlp()) return;
+
+    const rec = new SR();
+    rec.lang = 'es-ES';
+    rec.interimResults = false;
+    rec.maxAlternatives = 1;
+    this.isListeningNlp.set(true);
+
+    rec.onresult = (event: any) => {
+      const transcript: string = event.results[0][0].transcript;
+      this.nlpText.set(transcript);
+      this.isListeningNlp.set(false);
+      this.nlpAutofill();
+    };
+    rec.onerror = () => { this.isListeningNlp.set(false); this.toast.error('Error al capturar audio.'); };
+    rec.onend = () => { this.isListeningNlp.set(false); };
+    rec.start();
+  }
+
+  startVoiceForField(fieldName: string): void {    const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
     if (!SR) { this.toast.error('Tu navegador no soporta reconocimiento de voz.'); return; }
     if (this.listeningField() === fieldName) return;
 
