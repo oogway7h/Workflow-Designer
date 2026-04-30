@@ -2,7 +2,7 @@ import { Component, inject, OnInit, signal } from '@angular/core';
 import { CommonModule, KeyValuePipe } from '@angular/common';
 import { ActivatedRoute, Router } from '@angular/router';
 import { FormsModule } from '@angular/forms';
-import { LucideAngularModule, ArrowLeft, CheckCircle, FileText, User, Clock, Save, AlertTriangle, WandSparkles, Mic, Loader } from 'lucide-angular';
+import { LucideAngularModule, ArrowLeft, CheckCircle, FileText, User, Clock, Save, AlertTriangle, WandSparkles, Mic, Loader, Trash2, Plus } from 'lucide-angular';
 import { PolicyService } from '../../../core/services/policy.service';
 import { LoaderComponent } from '../../../shared/components/loader/loader.component';
 import { ToastService } from '../../../shared/services/toast.service';
@@ -127,6 +127,55 @@ import { AuthService } from '../../../core/services/auth.service';
                              </div>
                            } @else if (field.type === 'number') {
                              <input type="number" [disabled]="!isTaskPending()" [(ngModel)]="formData[field.name]" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm focus:ring-2 focus:ring-primary/20 outline-none transition-all" [class.ring-2]="listeningField() === field.name" [class.ring-primary]="listeningField() === field.name">
+                           } @else if (field.type === 'grid') {
+                             <div class="space-y-2 mt-1">
+                               <div class="overflow-x-auto rounded-lg border border-border">
+                                 <table class="w-full text-sm">
+                                   <thead class="bg-muted/50">
+                                     <tr>
+                                       @for (col of (field.columns || []); track col) {
+                                         <th class="px-3 py-2 text-left text-xs font-semibold text-muted-foreground uppercase tracking-wider border-b border-border">{{ col }}</th>
+                                       }
+                                       @if (isTaskPending()) {
+                                         <th class="w-10 border-b border-border"></th>
+                                       }
+                                     </tr>
+                                   </thead>
+                                   <tbody>
+                                     @for (row of (formData[field.name] || []); track $index; let ri = $index) {
+                                       <tr class="border-b border-border last:border-0 hover:bg-muted/20 transition-colors">
+                                         @for (col of (field.columns || []); track col) {
+                                           <td class="px-2 py-1.5">
+                                             <input type="text" [disabled]="!isTaskPending()"
+                                               [(ngModel)]="formData[field.name][ri][col]"
+                                               class="w-full rounded border border-input bg-background px-2 py-1 text-sm focus:ring-2 focus:ring-primary/20 outline-none transition-all disabled:bg-muted/30 disabled:cursor-not-allowed" />
+                                           </td>
+                                         }
+                                         @if (isTaskPending()) {
+                                           <td class="px-1 py-1.5 text-center">
+                                             <button type="button" (click)="removeGridRow(field.name, ri)"
+                                               class="inline-flex h-6 w-6 items-center justify-center rounded text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors">
+                                               <lucide-icon [img]="TrashIcon" [size]="13" />
+                                             </button>
+                                           </td>
+                                         }
+                                       </tr>
+                                     }
+                                     @if ((formData[field.name] || []).length === 0) {
+                                       <tr>
+                                         <td [attr.colspan]="(field.columns?.length || 1) + 1" class="px-3 py-4 text-center text-sm text-muted-foreground italic">Sin filas. Agrega una fila para comenzar.</td>
+                                       </tr>
+                                     }
+                                   </tbody>
+                                 </table>
+                               </div>
+                               @if (isTaskPending()) {
+                                 <button type="button" (click)="addGridRow(field.name, field.columns || [])"
+                                   class="inline-flex items-center gap-1 rounded-lg border border-dashed border-primary/50 px-3 py-1.5 text-xs font-medium text-primary hover:bg-primary/5 transition-colors">
+                                   <lucide-icon [img]="PlusIcon" [size]="13" /> Agregar fila
+                                 </button>
+                               }
+                             </div>
                            } @else {
                              <textarea [disabled]="!isTaskPending()" [(ngModel)]="formData[field.name]" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm focus:ring-2 focus:ring-primary/20 outline-none transition-all" rows="4" [class.ring-2]="listeningField() === field.name" [class.ring-primary]="listeningField() === field.name"></textarea>
                            }
@@ -230,6 +279,8 @@ export class EmployeeTaskDetailComponent implements OnInit {
   readonly Wand2 = WandSparkles;
   readonly MicIcon = Mic;
   readonly LoaderIcon = Loader;
+  readonly TrashIcon = Trash2;
+  readonly PlusIcon = Plus;
 
   private readonly route = inject(ActivatedRoute);
   private readonly router = inject(Router);
@@ -279,6 +330,8 @@ export class EmployeeTaskDetailComponent implements OnInit {
                    this.formData[field.name] = false;
                 } else if (field.type === 'number') {
                    this.formData[field.name] = 0;
+                } else if (field.type === 'grid') {
+                   this.formData[field.name] = [];
                 } else {
                    this.formData[field.name] = '';
                 }
@@ -441,5 +494,16 @@ export class EmployeeTaskDetailComponent implements OnInit {
 
   goBack(): void {
     this.router.navigate(['/app/employee/inbox']);
+  }
+
+  addGridRow(fieldName: string, columns: string[]): void {
+    if (!this.formData[fieldName]) this.formData[fieldName] = [];
+    const emptyRow: Record<string, string> = {};
+    columns.forEach(col => emptyRow[col] = '');
+    this.formData[fieldName] = [...this.formData[fieldName], emptyRow];
+  }
+
+  removeGridRow(fieldName: string, rowIndex: number): void {
+    this.formData[fieldName] = (this.formData[fieldName] as any[]).filter((_, i) => i !== rowIndex);
   }
 }

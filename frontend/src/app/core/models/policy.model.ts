@@ -2,6 +2,7 @@ export interface FormField {
   name: string;
   type: string;
   required?: boolean;
+  columns?: string[]; // for type='grid': column header names
 }
 
 export interface ActivityNode {

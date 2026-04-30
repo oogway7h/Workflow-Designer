@@ -885,7 +885,8 @@ import { LoaderComponent } from '../../shared/components/loader/loader.component
                     </div>
                     <div class="space-y-2">
                       @for (field of formDesignerFields(); track $index) {
-                        <div class="grid grid-cols-[1fr_140px_60px_40px] gap-2 items-center rounded-lg border border-border bg-muted/30 p-2">
+                        <div class="rounded-lg border border-border bg-muted/30 p-2 space-y-2">
+                          <div class="grid grid-cols-[1fr_140px_60px_40px] gap-2 items-center">
                           <input type="text" [ngModel]="field.name" (ngModelChange)="updateFormField($index, 'name', $event)"
                             class="rounded-md border border-input bg-background px-2.5 py-1.5 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
                             placeholder="nombre_campo" />
@@ -896,6 +897,7 @@ import { LoaderComponent } from '../../shared/components/loader/loader.component
                             <option value="boolean">Si / No</option>
                             <option value="date">Fecha</option>
                             <option value="text">Texto largo</option>
+                            <option value="grid">Grilla</option>
                           </select>
                           <div class="flex items-center justify-center">
                             <input type="checkbox" [ngModel]="field.required" (ngModelChange)="updateFormField($index, 'required', $event)"
@@ -905,6 +907,17 @@ import { LoaderComponent } from '../../shared/components/loader/loader.component
                             class="inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground hover:bg-destructive/10 hover:text-destructive transition-colors">
                             <lucide-icon [img]="Trash2" [size]="14" />
                           </button>
+                          </div>
+                          @if (field.type === 'grid') {
+                            <div class="pl-1 space-y-1">
+                              <label class="text-[10px] font-bold uppercase text-muted-foreground tracking-wider">Columnas de la grilla (separadas por coma)</label>
+                              <input type="text"
+                                [ngModel]="(field.columns || []).join(',')"
+                                (ngModelChange)="updateGridColumns($index, $event)"
+                                class="w-full rounded-md border border-input bg-background px-2.5 py-1.5 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+                                placeholder="Ej: Nombre, DNI, Monto" />
+                            </div>
+                          }
                         </div>
                       }
                     </div>
@@ -1822,6 +1835,13 @@ export class PolicyDesignerComponent implements OnInit {
   updateFormField(index: number, prop: keyof FormField, value: any): void {
     this.formDesignerFields.update((fields) =>
       fields.map((f, i) => (i === index ? { ...f, [prop]: value } : f))
+    );
+  }
+
+  updateGridColumns(index: number, csv: string): void {
+    const cols = csv.split(',').map(c => c.trim()).filter(c => c.length > 0);
+    this.formDesignerFields.update((fields) =>
+      fields.map((f, i) => (i === index ? { ...f, columns: cols } : f))
     );
   }
 

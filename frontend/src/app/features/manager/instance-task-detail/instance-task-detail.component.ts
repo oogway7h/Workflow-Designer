@@ -91,6 +91,30 @@ import { ToastService } from '../../../shared/services/toast.service';
                              <textarea [disabled]="true" [(ngModel)]="formData[field.name]" class="w-full rounded-lg border border-input bg-muted/30 px-3 py-2 text-sm outline-none cursor-not-allowed" rows="3"></textarea>
                            } @else if (field.type === 'number') {
                              <input type="number" [disabled]="true" [(ngModel)]="formData[field.name]" class="w-full rounded-lg border border-input bg-muted/30 px-3 py-2 text-sm outline-none cursor-not-allowed">
+                           } @else if (field.type === 'grid') {
+                             <div class="overflow-x-auto rounded-lg border border-border mt-1">
+                               <table class="w-full text-sm">
+                                 <thead class="bg-muted/50">
+                                   <tr>
+                                     @for (col of (field.columns || []); track col) {
+                                       <th class="px-3 py-2 text-left text-xs font-semibold text-muted-foreground uppercase tracking-wider border-b border-border">{{ col }}</th>
+                                     }
+                                   </tr>
+                                 </thead>
+                                 <tbody>
+                                   @for (row of (formData[field.name] || []); track $index) {
+                                     <tr class="border-b border-border last:border-0">
+                                       @for (col of (field.columns || []); track col) {
+                                         <td class="px-3 py-2 text-sm text-foreground">{{ row[col] || '—' }}</td>
+                                       }
+                                     </tr>
+                                   }
+                                   @if ((formData[field.name] || []).length === 0) {
+                                     <tr><td [attr.colspan]="field.columns?.length || 1" class="px-3 py-4 text-center text-sm text-muted-foreground italic">Sin datos</td></tr>
+                                   }
+                                 </tbody>
+                               </table>
+                             </div>
                            } @else {
                              <input type="text" [disabled]="true" [(ngModel)]="formData[field.name]" class="w-full rounded-lg border border-input bg-muted/30 px-3 py-2 text-sm outline-none cursor-not-allowed">
                            }
@@ -240,6 +264,8 @@ export class InstanceTaskDetailComponent implements OnInit {
                    this.formData[field.name] = false;
                 } else if (field.type === 'number') {
                    this.formData[field.name] = 0;
+                } else if (field.type === 'grid') {
+                   this.formData[field.name] = [];
                 } else {
                    this.formData[field.name] = '';
                 }
