@@ -459,6 +459,8 @@ export class EmployeeTaskDetailComponent implements OnInit {
                 this.formData[f.name] = v === 'true' || v === 'sí' || v === 'si' || v === 'confirmado' || v === 'aprobado';
               } else if (f.type === 'number') {
                 this.formData[f.name] = Number(filled[f.name]) || 0;
+              } else if (f.type === 'grid') {
+                this.formData[f.name] = this.normalizeGridRows(filled[f.name], f.columns || []);
               } else {
                 this.formData[f.name] = String(filled[f.name]);
               }
@@ -485,12 +487,17 @@ export class EmployeeTaskDetailComponent implements OnInit {
     const fields: any[] = details.formSchemaJson?.fields ?? [];
     if (fields.length === 0) { this.toast.error('El formulario no tiene campos definidos.'); return; }
 
-    const fieldDescriptions = fields.map((f: any) => `- ${f.name} (tipo: ${f.type || 'texto'}${f.type === 'grid' && f.columns?.length ? ', columnas: ' + f.columns.join(', ') : ''})`).join('\n');
+    const fieldDescriptions = fields.map((f: any) => {
+      if (f.type === 'grid' && f.columns?.length) {
+        return `- ${f.name} (tipo: grid, array de objetos, las claves de cada objeto deben ser EXACTAMENTE: ${f.columns.map((c: string) => '"' + c.trim() + '"').join(', ')})`;
+      }
+      return `- ${f.name} (tipo: ${f.type || 'texto'})`;
+    }).join('\n');
     const prompt = `Extrae información del siguiente texto para completar un formulario de gestión.\n\n` +
       `Texto del usuario: "${text}"\n\n` +
       `Campos a completar:\n${fieldDescriptions}\n\n` +
       `Responde ÚNICAMENTE con un objeto JSON válido (sin markdown, sin explicaciones) donde las claves sean los nombres exactos de los campos y los valores correspondan a la información extraída del texto. ` +
-      `Para campos de tipo 'grid', el valor debe ser un array de objetos con las columnas como claves. ` +
+      `Para campos de tipo 'grid', el valor debe ser un array de objetos donde las claves de cada objeto sean EXACTAMENTE los nombres de columna indicados. ` +
       `Para campos booleanos usa true o false. Para campos numéricos usa números.`;
 
     const userRole = this.authService.getCurrentUserRole() || 'employee';
@@ -515,7 +522,7 @@ export class EmployeeTaskDetailComponent implements OnInit {
               } else if (f.type === 'number') {
                 this.formData[f.name] = Number(filled[f.name]) || 0;
               } else if (f.type === 'grid') {
-                this.formData[f.name] = Array.isArray(filled[f.name]) ? filled[f.name] : [];
+                this.formData[f.name] = this.normalizeGridRows(filled[f.name], f.columns || []);
               } else {
                 this.formData[f.name] = String(filled[f.name]);
               }
@@ -601,6 +608,27 @@ export class EmployeeTaskDetailComponent implements OnInit {
 
   goBack(): void {
     this.router.navigate(['/app/employee/inbox']);
+  }
+
+  private normalizeGridRows(aiValue: any, schemaColumns: string[]): Record<string, string>[] {
+    const rawRows = Array.isArray(aiValue) ? aiValue : [];
+    const cols = schemaColumns.map((c: string) => c.trim());
+    return rawRows.map((row: any) => {
+      const normalized: Record<string, string> = {};
+      // Start with all schema columns, try to find matching AI key (case-insensitive)
+      cols.forEach(col => {
+        const aiKey = Object.keys(row).find(k => k.trim().toLowerCase() === col.toLowerCase());
+        normalized[col] = aiKey !== undefined ? String(row[aiKey] ?? '') : '';
+      });
+      // Also include any AI keys that didn't match any schema column (preserves extra data)
+      Object.keys(row).forEach(aiKey => {
+        const alreadyMapped = cols.some(col => aiKey.trim().toLowerCase() === col.toLowerCase());
+        if (!alreadyMapped) {
+          normalized[aiKey.trim()] = String(row[aiKey] ?? '');
+        }
+      });
+      return normalized;
+    });
   }
 
   addGridRow(fieldName: string, columns: string[]): void {
