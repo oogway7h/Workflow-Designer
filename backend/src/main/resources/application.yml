@@ -1,0 +1,40 @@
+spring:
+  application:
+    name: workflow-engine
+  data:
+    mongodb:
+      uri: ${MONGODB_URI}
+  mail:
+    host: ${MAIL_HOST:smtp.gmail.com}
+    port: ${MAIL_PORT:587}
+    username: ${MAIL_USERNAME}
+    password: ${MAIL_PASSWORD}
+    properties:
+      mail:
+        smtp:
+          auth: true
+          starttls:
+            enable: true
+            required: true
+
+server:
+  port: ${PORT:8080}
+
+jwt:
+  secret: ${JWT_SECRET:c2VjcmV0LWtleS1mb3Itd29ya2Zsb3ctZW5naW5lLXB1ZHMtMjAyNi0hLUNoYW5nZU1lSW5Qcm9k}
+  expiration-ms: ${JWT_EXPIRATION_MS:86400000}
+
+ai:
+  microservice:
+    url: ${AI_MICROSERVICE_URL:http://localhost:8000/api/v1/ai}
+
+app:
+  reset-token-expiry-minutes: 15
+  frontend-url: ${FRONTEND_URL:http://localhost:4200}
+  firebase:
+    credentials-path: ${FIREBASE_CREDENTIALS_PATH:firebase-service-account.json}
+
+logging:
+  level:
+    root: INFO
+    com.primer.parcialse: DEBUG

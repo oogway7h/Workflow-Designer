@@ -1,0 +1,54 @@
+services:
+
+  # ─────────────────────────────────────────────
+  # IA Microservice (FastAPI)
+  # ─────────────────────────────────────────────
+  ia_service:
+    build:
+      context: ./ia_service
+    container_name: ia_service
+    restart: unless-stopped
+    env_file:
+      - ./ia_service/.env
+    expose:
+      - "8000"
+    networks:
+      - app-network
+
+  # ─────────────────────────────────────────────
+  # Backend (Spring Boot)
+  # ─────────────────────────────────────────────
+  backend:
+    build:
+      context: ./backend
+    container_name: backend
+    restart: unless-stopped
+    env_file:
+      - ./backend/.env
+    environment:
+      AI_MICROSERVICE_URL: http://ia_service:8000/api/v1/ai
+    expose:
+      - "8080"
+    depends_on:
+      - ia_service
+    networks:
+      - app-network
+
+  # ─────────────────────────────────────────────
+  # Frontend (Angular + Nginx)
+  # ─────────────────────────────────────────────
+  frontend:
+    build:
+      context: ./frontend
+    container_name: frontend
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    depends_on:
+      - backend
+    networks:
+      - app-network
+
+networks:
+  app-network:
+    driver: bridge

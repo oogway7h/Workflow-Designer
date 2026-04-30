@@ -1,0 +1,30 @@
+# Environment variables - NEVER commit
+**/.env
+.env
+
+# Backend
+backend/target/
+backend/*.bak
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+frontend/.angular/
+
+# IA Service
+ia_service/.venv/
+ia_service/__pycache__/
+ia_service/**/__pycache__/
+ia_service/**/*.pyc
+
+# Firebase credentials
+**/firebase-service-account.json
+
+# IDE
+.idea/
+*.iml
+.vscode/
+
+# OS
+.DS_Store
+Thumbs.db
