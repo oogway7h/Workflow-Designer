@@ -460,7 +460,8 @@ export class EmployeeTaskDetailComponent implements OnInit {
               } else if (f.type === 'number') {
                 this.formData[f.name] = Number(filled[f.name]) || 0;
               } else if (f.type === 'grid') {
-                this.formData[f.name] = this.normalizeGridRows(filled[f.name], f.columns || []);
+                const rows = this.normalizeGridRows(filled[f.name], f.columns || []);
+                if (rows.length > 0) this.formData[f.name] = rows;
               } else {
                 this.formData[f.name] = String(filled[f.name]);
               }
@@ -497,8 +498,8 @@ export class EmployeeTaskDetailComponent implements OnInit {
       `Texto del usuario: "${text}"\n\n` +
       `Campos a completar:\n${fieldDescriptions}\n\n` +
       `Responde ÚNICAMENTE con un objeto JSON válido (sin markdown, sin explicaciones) donde las claves sean los nombres exactos de los campos y los valores correspondan a la información extraída del texto. ` +
-      `Para campos de tipo 'grid', el valor debe ser un array de objetos donde las claves de cada objeto sean EXACTAMENTE los nombres de columna indicados. ` +
-      `Para campos booleanos usa true o false. Para campos numéricos usa números.`;
+      `Para campos de tipo 'grid', el valor debe ser un array de objetos donde las claves de cada objeto sean EXACTAMENTE los nombres de columna indicados. NUNCA devuelvas un array vacío [] para campos grid; si no hay datos suficientes, omite ese campo del JSON. ` +
+      `Para campos booleanos usa true o false. Para campos numéricos usa números. Si no encontrás información suficiente para un campo, omitilo del JSON en lugar de devolver un valor vacío.`;
 
     const userRole = this.authService.getCurrentUserRole() || 'employee';
     this.isNlpLoading.set(true);
@@ -522,7 +523,8 @@ export class EmployeeTaskDetailComponent implements OnInit {
               } else if (f.type === 'number') {
                 this.formData[f.name] = Number(filled[f.name]) || 0;
               } else if (f.type === 'grid') {
-                this.formData[f.name] = this.normalizeGridRows(filled[f.name], f.columns || []);
+                const rows = this.normalizeGridRows(filled[f.name], f.columns || []);
+                if (rows.length > 0) this.formData[f.name] = rows;
               } else {
                 this.formData[f.name] = String(filled[f.name]);
               }
