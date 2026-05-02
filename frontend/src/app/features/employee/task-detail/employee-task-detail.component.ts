@@ -425,7 +425,12 @@ export class EmployeeTaskDetailComponent implements OnInit {
     const fields: any[] = details.formSchemaJson?.fields ?? [];
     if (fields.length === 0) { this.toast.error('El formulario no tiene campos definidos.'); return; }
 
-    const fieldDescriptions = fields.map((f: any) => `- ${f.name} (${f.label || f.name}, tipo: ${f.type || 'texto'})`).join('\n');
+    const fieldDescriptions = fields.map((f: any) => {
+      if (f.type === 'grid' && f.columns?.length) {
+        return `- ${f.name} (tipo: grid, array de objetos, las claves de cada objeto deben ser EXACTAMENTE: ${f.columns.map((c: string) => '"' + c.trim() + '"').join(', ')}). Genera al menos 1 fila de ejemplo con datos coherentes al contexto del trámite.`;
+      }
+      return `- ${f.name} (${f.label || f.name}, tipo: ${f.type || 'texto'})`;
+    }).join('\n');
     const existingData = details.instanceData && Object.keys(details.instanceData).length > 0
       ? JSON.stringify(details.instanceData)
       : 'Ninguno';
@@ -435,7 +440,8 @@ export class EmployeeTaskDetailComponent implements OnInit {
       `Tarea actual: ${details.currentTaskName || 'Desconocida'}\n` +
       `Datos previos del trámite: ${existingData}\n\n` +
       `Campos del formulario a completar:\n${fieldDescriptions}\n\n` +
-      `Responde ÚNICAMENTE con un objeto JSON válido (sin markdown, sin explicaciones) donde las claves sean los nombres exactos de los campos y los valores sean sugerencias apropiadas. ` +
+      `Responde ÚNICAMENTE con un objeto JSON válido (sin markdown, sin explicaciones) donde las claves sean los nombres exactos de los campos y los valores sean sugerencias apropiadas basadas en el contexto del trámite. ` +
+      `Para campos de tipo 'grid', devuelve siempre al menos 1 fila en el array usando las claves de columna indicadas EXACTAMENTE. NUNCA devuelvas [] para campos grid; genera datos ejemplo coherentes con el trámite. ` +
       `Para campos booleanos usa true o false. Para campos numéricos usa números. Para textos usa strings cortos y descriptivos.`;
 
     const userRole = this.authService.getCurrentUserRole() || 'employee';
@@ -498,8 +504,8 @@ export class EmployeeTaskDetailComponent implements OnInit {
       `Texto del usuario: "${text}"\n\n` +
       `Campos a completar:\n${fieldDescriptions}\n\n` +
       `Responde ÚNICAMENTE con un objeto JSON válido (sin markdown, sin explicaciones) donde las claves sean los nombres exactos de los campos y los valores correspondan a la información extraída del texto. ` +
-      `Para campos de tipo 'grid', el valor debe ser un array de objetos donde las claves de cada objeto sean EXACTAMENTE los nombres de columna indicados. NUNCA devuelvas un array vacío [] para campos grid; si no hay datos suficientes, omite ese campo del JSON. ` +
-      `Para campos booleanos usa true o false. Para campos numéricos usa números. Si no encontrás información suficiente para un campo, omitilo del JSON en lugar de devolver un valor vacío.`;
+      `Para campos de tipo 'grid', extrae todas las filas mencionadas en el texto y devuélvelas como array de objetos con las claves de columna indicadas EXACTAMENTE. Si el texto menciona múltiples ítems, genera una fila por ítem. NUNCA devuelvas [] para campos grid; si hay datos en el texto, úsalos. ` +
+      `Para campos booleanos usa true o false. Para campos numéricos usa números. Si no encontrás información suficiente para un campo no-grid, omitilo del JSON en lugar de devolver un valor vacío.`;
 
     const userRole = this.authService.getCurrentUserRole() || 'employee';
     this.isNlpLoading.set(true);
