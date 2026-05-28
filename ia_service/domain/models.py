@@ -11,6 +11,13 @@ class GeneratePolicyRequest(BaseModel):
     prompt: str
     departments: List[dict] = []
 
+class ModifyDiagramRequest(BaseModel):
+    prompt: str
+    departments: list[dict] = Field(default_factory=list)
+    current_diagram_json: dict = Field(alias='currentDiagramJson')
+
+    model_config = {'populate_by_name': True}
+
 class SuggestFieldResponse(BaseModel):
     suggestion: str
 

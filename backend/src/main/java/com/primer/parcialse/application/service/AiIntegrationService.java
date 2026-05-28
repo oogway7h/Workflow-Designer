@@ -7,8 +7,11 @@ import com.primer.parcialse.application.dto.ai.AutoAssignPolicyResponseDTO;
 import com.primer.parcialse.application.dto.ai.BottleneckRequestDTO;
 import com.primer.parcialse.application.dto.ai.BottleneckResponseDTO;
 import com.primer.parcialse.application.dto.ai.GeneratePolicyRequestDTO;
+import com.primer.parcialse.application.dto.ai.ModifyDiagramRequestDTO;
 import com.primer.parcialse.application.dto.ai.RoutingRequestDTO;
 import com.primer.parcialse.application.dto.ai.RoutingResponseDTO;
+import com.primer.parcialse.application.dto.ai.NlpIntentRequestDTO;
+import com.primer.parcialse.application.dto.ai.NlpIntentResponseDTO;
 import com.primer.parcialse.application.dto.ai.NlpNavigateRequestDTO;
 import com.primer.parcialse.application.dto.ai.NlpNavigateResponseDTO;
 import com.primer.parcialse.application.dto.ai.NlpFillFormRequestDTO;
@@ -57,6 +60,22 @@ public class AiIntegrationService {
     public Object generatePolicy(GeneratePolicyRequestDTO req) {
         try {
             return restTemplate.postForObject(aiMicroserviceUrl + "/generate-policy", req, Object.class);
+        } catch (RestClientException e) {
+            throw new AiServiceUnavailableException("Error de timeout o indisponibilidad en la IA", e);
+        }
+    }
+
+    public Object modifyDiagram(ModifyDiagramRequestDTO req) {
+        try {
+            return restTemplate.postForObject(aiMicroserviceUrl + "/modify-diagram", req, Object.class);
+        } catch (RestClientException e) {
+            throw new AiServiceUnavailableException("Error al comunicarse con la IA para modificar diagrama", e);
+        }
+    }
+
+    public NlpIntentResponseDTO nlpIntent(NlpIntentRequestDTO req) {
+        try {
+            return restTemplate.postForObject(aiMicroserviceUrl + "/nlp/intent", req, NlpIntentResponseDTO.class);
         } catch (RestClientException e) {
             throw new AiServiceUnavailableException("Error de timeout o indisponibilidad en la IA", e);
         }

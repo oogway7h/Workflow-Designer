@@ -1,8 +1,12 @@
 package com.primer.parcialse.presentation.controller;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.primer.parcialse.application.dto.ai.NlpIntentRequestDTO;
+import com.primer.parcialse.application.dto.ai.ModifyDiagramRequestDTO;
+import com.primer.parcialse.application.dto.ai.NlpIntentResponseDTO;
 import com.primer.parcialse.application.dto.ai.NlpNavigateRequestDTO;
 import com.primer.parcialse.application.dto.ai.NlpNavigateResponseDTO;
 import com.primer.parcialse.application.dto.ai.NlpFillFormRequestDTO;
@@ -53,16 +57,28 @@ public class AiFeatureController {
             mapper.configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
             String policyId = null;
 
+            Object currentDiagramJson = null;
             if (request.getScreenData() != null && !request.getScreenData().isEmpty()) {
                 JsonNode screenDataNode = mapper.readTree(request.getScreenData());
                 if (screenDataNode.has("activePolicyId")) {
                     policyId = screenDataNode.get("activePolicyId").asText();
                 }
+                if (screenDataNode.has("currentDiagramJson")) {
+                    currentDiagramJson = mapper.treeToValue(screenDataNode.get("currentDiagramJson"), Object.class);
+                }
+            }
+
+            if (policyId == null) {
+                return ResponseEntity.badRequest()
+                        .body(Map.of("message", "Debe tener una política abierta para generar o modificar un diagrama. Por favor, cree o seleccione una política primero."));
             }
 
             GeneratePolicyRequestDTO genRequest = new GeneratePolicyRequestDTO();
             genRequest.setPrompt(request.getUserMessage());
             genRequest.setDepartments(departmentService.getAll());
+            if (currentDiagramJson != null) {
+                genRequest.setCurrentDiagramJson(currentDiagramJson);
+            }
 
             Object iaGeneratedJsonResponse = aiIntegrationService.generatePolicy(genRequest);
 
@@ -114,11 +130,86 @@ public class AiFeatureController {
         }
     }
 
+    @PostMapping("/ai/modify-diagram")
+    public ResponseEntity<?> modifyDiagram(@RequestBody AssistantRequestDTO request) {
+        try {
+            ObjectMapper mapper = new ObjectMapper();
+            mapper.configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
+            String policyId = null;
+
+            Object currentDiagramJson = null;
+            if (request.getScreenData() != null && !request.getScreenData().isEmpty()) {
+                JsonNode screenDataNode = mapper.readTree(request.getScreenData());
+                if (screenDataNode.has("activePolicyId")) {
+                    policyId = screenDataNode.get("activePolicyId").asText();
+                }
+                if (screenDataNode.has("currentDiagramJson")) {
+                    currentDiagramJson = mapper.treeToValue(screenDataNode.get("currentDiagramJson"), Object.class);
+                }
+            }
+
+            if (policyId != null && currentDiagramJson == null) {
+                try {
+                    var policy = policyService.getByUuid(policyId);
+                    Map<String, Object> diagram = new java.util.LinkedHashMap<>();
+                    diagram.put("name", policy.getName());
+                    diagram.put("description", policy.getDescription());
+                    diagram.put("managerId", policy.getManagerId());
+                    diagram.put("ownerId", policy.getOwnerId());
+                    diagram.put("activityNodes", policy.getActivityNodes() != null ? policy.getActivityNodes() : new java.util.ArrayList<>());
+                    diagram.put("transitions", policy.getTransitions() != null ? policy.getTransitions() : new java.util.ArrayList<>());
+                    diagram.put("lanes", policy.getLanes() != null ? policy.getLanes() : new java.util.ArrayList<>());
+                    currentDiagramJson = diagram;
+                } catch (Exception e) {
+                    // Ignore, it will fail in the next check if policy wasn't found
+                }
+            }
+
+            if (policyId == null || currentDiagramJson == null) {
+                return ResponseEntity.badRequest()
+                        .body(Map.of("message", "Debe tener una política abierta y un diagrama existente para poder modificarlo."));
+            }
+
+            ModifyDiagramRequestDTO modRequest = new ModifyDiagramRequestDTO();
+            modRequest.setPrompt(request.getUserMessage());
+            modRequest.setDepartments(departmentService.getAll());
+            modRequest.setCurrentDiagramJson(currentDiagramJson);
+
+            Object iaGeneratedJsonResponse = aiIntegrationService.modifyDiagram(modRequest);
+
+            PolicyDiagramDTO diagramDTO = mapper.convertValue(iaGeneratedJsonResponse, PolicyDiagramDTO.class);
+            
+            policyService.updateDiagram(policyId, diagramDTO);
+
+            messagingTemplate.convertAndSend("/topic/policy/" + policyId,
+                    Map.of(
+                            "type", "DIAGRAM_UPDATED",
+                            "payload", diagramDTO));
+
+            return ResponseEntity.ok(Map.of(
+                    "reply", "¡He modificado y guardado el diagrama con éxito!",
+                    "generated_diagram", iaGeneratedJsonResponse
+            ));
+        } catch (JsonProcessingException e) {
+            return ResponseEntity.badRequest().body(Map.of("error", "Error al procesar screenData: " + e.getMessage()));
+        } catch (com.primer.parcialse.domain.exception.AiServiceUnavailableException e) {
+            return ResponseEntity.status(503).body(Map.of("error", e.getMessage()));
+        } catch (Exception e) {
+            e.printStackTrace();
+            return ResponseEntity.internalServerError().body(Map.of("error", e.getMessage() != null ? e.getMessage() : e.toString()));
+        }
+    }
+
     @GetMapping("/policies/{policyId}/analytics")
     @PreAuthorize("hasAnyRole('ADMIN', 'MANAGER', 'DESIGNER')")
     public ResponseEntity<BottleneckResponseDTO> generateAnalytics(@PathVariable String policyId) {
         BottleneckResponseDTO response = workflowAnalyticsService.generatePolicyAnalytics(policyId);
         return ResponseEntity.ok(response);
+    }
+
+    @PostMapping("/ai/nlp/intent")
+    public ResponseEntity<NlpIntentResponseDTO> nlpIntent(@RequestBody NlpIntentRequestDTO request) {
+        return ResponseEntity.ok(aiIntegrationService.nlpIntent(request));
     }
 
     @PostMapping("/ai/nlp/navigate")

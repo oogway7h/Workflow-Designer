@@ -8,6 +8,8 @@ import { AuthService } from '../../../core/services/auth.service';
 import { HttpErrorResponse } from '@angular/common/http';
 import { Router } from '@angular/router';
 import { finalize } from 'rxjs/operators';
+import { NlpService } from '../../../core/services/nlp.service';
+import { PolicyActionsService } from '../../../core/services/policy-actions.service';
 
 
 
@@ -113,16 +115,6 @@ interface Message {
               class="bg-blue-600 text-white rounded-full p-2 h-10 w-10 flex items-center justify-center hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0 shadow-sm">
               <lucide-icon [img]="Send" class="w-4 h-4"></lucide-icon>
             </button>
-            @if(this.router.url.includes('policies') || this.router.url.includes('manager/policies')){
-                <button
-                  type="button"
-                  class="bg-gray-300 text-gray-700 rounded-full p-2 h-10 w-10 flex items-center justify-center hover:bg-gray-400 transition-colors flex-shrink-0 shadow-sm"
-                  (click)="sendPolicyMessage()"
-                  [disabled]="!userInput.trim() || isLoading()"
-                  title="Obtener ayuda para crear política">
-                    <lucide-icon [img]="BadgeInfo" class="w-4 h-4"></lucide-icon>
-                </button>
-            }
           </form>
         </div>
       </div>
@@ -141,6 +133,8 @@ export class AiChatWidgetComponent implements AfterViewChecked {
 
   private aiService = inject(AiChatService);
   private authService = inject(AuthService);
+  private nlpService = inject(NlpService);
+  private policyActionsService = inject(PolicyActionsService);
   public router = inject(Router);
   
   isOpen = signal(false);
@@ -200,6 +194,45 @@ export class AiChatWidgetComponent implements AfterViewChecked {
     const currentUser = this.authService.currentUser();
     const userRole = currentUser?.role?.toLowerCase() || 'funcionario';
 
+    this.nlpService.detectIntent(currentPrompt, this.router.url).subscribe({
+      next: (res) => {
+        if (res.intent === 'generate_policy') {
+          this._executePolicyMessage(currentPrompt, userRole, false);
+        } else if (res.intent === 'modify_diagram') {
+          this._executePolicyMessage(currentPrompt, userRole, true);
+        } else if (res.intent === 'open_create_policy') {
+          this.isLoading.set(false);
+          const botMessage: Message = {
+            text: 'Abriendo el formulario para crear una nueva política...',
+            isUser: false,
+            timestamp: new Date()
+          };
+          this.messages.update(msgs => [...msgs, botMessage]);
+          this._handleOpenCreatePolicy();
+        } else {
+          this._executeChatMessage(currentPrompt, userRole);
+        }
+      },
+      error: () => {
+        this._executeChatMessage(currentPrompt, userRole);
+      }
+    });
+  }
+
+  private _handleOpenCreatePolicy(): void {
+    const isOnPolicies = this.router.url.includes('/policies');
+    if (isOnPolicies) {
+      this.policyActionsService.openCreateModal.set(true);
+    } else {
+      this.router.navigate(['/app/policies']).then(() => {
+        setTimeout(() => {
+          this.policyActionsService.openCreateModal.set(true);
+        }, 800);
+      });
+    }
+  }
+
+  private _executeChatMessage(currentPrompt: string, userRole: string) {
     const request: AIChatRequest = {
       user_role: userRole,
       current_screen: this.router.url,
@@ -220,6 +253,43 @@ export class AiChatWidgetComponent implements AfterViewChecked {
       },
       error: (err: HttpErrorResponse) => {
         const errorMsg = err.error?.message || 'Lo siento, ha ocurrido un error al conectar con el servicio de IA.';
+        const botMessage: Message = {
+          text: errorMsg,
+          isUser: false,
+          timestamp: new Date()
+        };
+        this.messages.update(msgs => [...msgs, botMessage]);
+      }
+    });
+  }
+
+  private _executePolicyMessage(currentPrompt: string, userRole: string, isModification: boolean = false) {
+    const request: AIChatRequest = {
+      user_role: userRole,
+      current_screen: this.router.url,
+      user_message: currentPrompt,
+      screen_data: this.aiService.activePolicyId
+        ? JSON.stringify({ activePolicyId: this.aiService.activePolicyId })
+        : ''
+    };
+
+    const actionObservable = isModification 
+      ? this.aiService.modifyDiagram(request)
+      : this.aiService.generatePolicy(request);
+
+    actionObservable.pipe(
+      finalize(() => this.isLoading.set(false))
+    ).subscribe({
+      next: (response) => {
+        const botMessage: Message = {
+          text: response.reply || (isModification ? 'Diagrama modificado con éxito.' : 'Respuesta de creación de política.'),
+          isUser: false,
+          timestamp: new Date()
+        };
+        this.messages.update(msgs => [...msgs, botMessage]);
+      },
+      error: (err: HttpErrorResponse) => {
+        const errorMsg = err.error?.message || (isModification ? 'Lo siento, ha ocurrido un error al modificar el diagrama.' : 'Lo siento, ha ocurrido un error al generar la política.');
         const botMessage: Message = {
           text: errorMsg,
           isUser: false,

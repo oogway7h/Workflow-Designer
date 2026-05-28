@@ -1,3 +1,6 @@
+@import 'quill/dist/quill.snow.css';
+@import 'quill-cursors/css';
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;

@@ -6,16 +6,28 @@ import { catchError, throwError } from 'rxjs';
 export const apiInterceptor: HttpInterceptorFn = (req, next) => {
   const router = inject(Router);
 
-  const headers: Record<string, string> = {
-    'Content-Type': 'application/json',
-  };
+  // Skip interceptor for external URLs (S3 presigned URLs, Syncfusion API, etc.)
+  const isExternalRequest = !req.url.startsWith('/') && !req.url.includes('localhost');
+  if (isExternalRequest) {
+    return next(req).pipe(
+      catchError((error: HttpErrorResponse) => {
+        return throwError(() => error);
+      })
+    );
+  }
+
+  let newHeaders = req.headers;
+
+  if (!(req.body instanceof FormData) && !newHeaders.has('Content-Type')) {
+    newHeaders = newHeaders.set('Content-Type', 'application/json');
+  }
 
   const token = localStorage.getItem('auth_token');
   if (token) {
-    headers['Authorization'] = `Bearer ${token}`;
+    newHeaders = newHeaders.set('Authorization', `Bearer ${token}`);
   }
 
-  const apiReq = req.clone({ setHeaders: headers });
+  const apiReq = req.clone({ headers: newHeaders });
 
   return next(apiReq).pipe(
     catchError((error: HttpErrorResponse) => {

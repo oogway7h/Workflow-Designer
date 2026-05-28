@@ -1,6 +1,7 @@
 from fastapi import APIRouter
 from domain.models import (
     SuggestFieldRequest, GeneratePolicyRequest, SuggestFieldResponse,
+    ModifyDiagramRequest,
     ChatRequest, ChatResponse,
     RecommendAssigneeRequest, RecommendAssigneeResponse,
     AnalyticsBottlenecksRequest, AnalyticsBottlenecksResponse,
@@ -26,6 +27,16 @@ async def generate_policy(request: GeneratePolicyRequest):
     """
     policy_json = ai_service.generate_policy(request)
     return policy_json
+
+@router.post("/modify-diagram", summary="IA - Modificar Diagrama Existente")
+async def modify_diagram(request: ModifyDiagramRequest):
+    """
+    Modifica un diagrama de política existente basándose en un prompt y el JSON actual.
+    """
+    try:
+        return ai_service.modify_diagram(request)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/assistant/chat", response_model=ChatResponse, summary="Asistente Contextual (Tour e Interfaz)")
 async def assistant_chat(request: ChatRequest):

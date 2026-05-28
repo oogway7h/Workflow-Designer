@@ -991,6 +991,30 @@ export class PolicyDesignerComponent implements OnInit {
         this.openCreatePolicy();
       }
     });
+
+    // Sync diagram state to AiChatService
+    effect(() => {
+      const activePolicy = this.selectedPolicy();
+      if (activePolicy) {
+        this.aiChatService.activePolicyId = activePolicy.uuid;
+        const diagram = {
+          name: activePolicy.name,
+          description: activePolicy.description,
+          managerId: activePolicy.managerId,
+          ownerId: activePolicy.ownerId,
+          activityNodes: this.canvasNodes().map((n) => ({
+            uuid: n.uuid, name: n.name, description: n.description, state: n.state, formSchemaJson: n.formSchemaJson,
+            x: n.x || 0, y: n.y || 0, laneId: n.laneId || ''
+          })),
+          transitions: this.diagramTransitions(),
+          lanes: this.canvasLanes().map(l => ({ ...l }))
+        };
+        this.aiChatService.currentDiagramJson.set(diagram);
+      } else {
+        this.aiChatService.activePolicyId = null;
+        this.aiChatService.currentDiagramJson.set(null);
+      }
+    });
   }
 
   readonly Plus = Plus;
@@ -1323,12 +1347,12 @@ export class PolicyDesignerComponent implements OnInit {
 
     this.policyService.getByUuid(policy.uuid).subscribe({
       next: (full) => { 
-        this.aiChatService.activePolicyId = full.uuid;
+        // this.aiChatService.activePolicyId handled by effect
         openEditor(full); 
         this.connectWebSocket(full.uuid); 
       },
       error: () => { 
-        this.aiChatService.activePolicyId = policy.uuid;
+        // this.aiChatService.activePolicyId handled by effect
         openEditor(policy); 
         this.connectWebSocket(policy.uuid); 
       },
@@ -1446,7 +1470,7 @@ export class PolicyDesignerComponent implements OnInit {
       this.stompSub = undefined;
     }
     this.selectedPolicy.set(null);
-    this.aiChatService.activePolicyId = null;
+    // this.aiChatService.activePolicyId = null; handled by effect
     this.canvasNodes.set([]);
     this.canvasLanes.set([]);
     this.diagramTransitions.set([]);

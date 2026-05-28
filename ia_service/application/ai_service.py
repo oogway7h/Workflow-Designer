@@ -2,7 +2,7 @@ from groq import Groq
 import os
 from fastapi import HTTPException
 from domain.models import (
-    SuggestFieldRequest, GeneratePolicyRequest,
+    SuggestFieldRequest, GeneratePolicyRequest, ModifyDiagramRequest,
     ChatRequest, RecommendAssigneeRequest, AnalyticsBottlenecksRequest,
     NlpNavigateRequest, NlpFillFormRequest, NlpIntentRequest
 )
@@ -37,17 +37,12 @@ class AIService:
 
     def generate_policy(self, request: GeneratePolicyRequest) -> dict:
         departments_json = json.dumps(request.departments, ensure_ascii=False) if request.departments else "[]"
-        try:
-            response = self.client.chat.completions.create(
-                model=self.model_complex,
-                response_format={"type": "json_object"},
-                messages=[
-                    {
-                        "role": "system",
-                        "content": f"""Eres un experto en modelado funcional BPMN. El usuario requiere generar un flujo de trabajo a partir de su descripción dictada.
+        
+        system_prompt = f"""Eres un experto en modelado funcional BPMN y UML 2.5. El usuario requiere generar un flujo de trabajo a partir de su descripción dictada.
 REGLAS ESTRICTAS PARA EL JSON:
-1. Lanes: Usa ÚNICAMENTE departamentos de esta lista: {departments_json}. NO inventes ni agregues departamentos que no estén en esa lista. No es necesario usar todos — solo incluye los que sean relevantes para el proceso descrito. Si la lista está vacía, usa un lane genérico con id 'default' y name 'General'. Cada lane en el array 'lanes' debe tener 'id' (string), 'name' (string), 'x' (usa 0) y 'width' (usa 250).
-2. Nodos ('activityNodes'): Cada uno DEBE incluir los campos: 'uuid' (string único), 'name' (string), 'description' (string), 'state' (ver opciones permitidas), 'x' (usa 0), 'y' (usa 0), 'laneId' (asignado a uno disponible), 'assigneeId' (null es válido), y 'formSchemaJson' (objeto vacío {{}}).
+1. Lanes: Usa ÚNICAMENTE departamentos de esta lista: {departments_json}. NO inventes ni agregues departamentos que no estén en esa lista. Si la lista está vacía, usa un lane genérico con id 'default' y name 'General'.
+2. Nodos ('activityNodes'): Cada uno DEBE incluir los campos: 'uuid' (string único), 'name' (string), 'description' (string), 'state' (ver opciones permitidas), 'x' (usa 0), 'y' (usa 0), 'laneId' (asignado a uno disponible), 'assigneeId' (null es válido).
+3. Formularios ('formSchemaJson'): Si el usuario especifica explícitamente que una actividad debe tener un formulario (inputs, grids, tablas), genéralo dentro del campo 'formSchemaJson'. De lo contrario, usa un objeto vacío {{}}.
 3. Atributo 'state' para los nodos (PUNTOS CLAVE):
    - 'INITIAL': Nodo obligatorio al inicio del flujo.
    - 'FINAL': Nodo obligatorio al terminar un camino del flujo (puede haber varios).
@@ -60,6 +55,15 @@ REGLAS ESTRICTAS PARA EL JSON:
 5. Lógica de bifurcación: Si creas un nodo 'DECISION', asegúrate de crear al menos 2 'transitions' de salida con diferentes condiciones (ej. "Aprobado", "Rechazado").
 6. Estructura RAÍZ: DEBE incluir 'name', 'description', 'managerId' (null válido), 'ownerId' (null válido), 'activityNodes' (array), 'transitions' (array), 'lanes' (array).
 Devuelve ÚNICAMENTE el JSON representando este proceso, detectando todos los forks y decisiones de la narrativa. NO uses bloques de código alrededor."""
+
+        try:
+            response = self.client.chat.completions.create(
+                model=self.model_complex,
+                response_format={"type": "json_object"},
+                messages=[
+                    {
+                        "role": "system",
+                        "content": system_prompt
                     },
                     {
                         "role": "user",
@@ -95,6 +99,49 @@ Devuelve ÚNICAMENTE el JSON representando este proceso, detectando todos los fo
              raise HTTPException(status_code=500, detail=str(ve))
         except Exception as e:
             raise HTTPException(status_code=503, detail=f"Error al comunicarse con la API de Groq: {str(e)}")
+
+    def modify_diagram(self, request: ModifyDiagramRequest) -> dict:
+        current_diagram_str = json.dumps(request.current_diagram_json, ensure_ascii=False)
+        system_prompt = f"""Eres un experto en modelado funcional BPMN y UML 2.5. Se te provee el JSON de un diagrama existente.
+Tu ÚNICA tarea es aplicar el cambio exacto y mínimo que pide el usuario sobre este JSON y devolver el MISMO JSON con esa modificación.
+REGLAS ESTRICTAS:
+1. NO borres, elimines ni modifiques nodos, transiciones o lanes existentes a menos que el usuario lo pida explícitamente.
+2. Aplica SOLO los cambios solicitados (ej: agregar un nodo específico, cambiar una conexión, eliminar un nodo).
+3. Mantén TODOS los 'uuid' y demás atributos existentes intactos. Para elementos nuevos, genera nuevos uuid únicos.
+4. Nodos ('activityNodes'): Cada uno DEBE incluir 'uuid', 'name', 'description', 'state', 'x', 'y', 'laneId', 'assigneeId', 'formSchemaJson'.
+5. Formularios ('formSchemaJson'): Si el usuario pide agregar o quitar campos de formulario, grid, inputs en una actividad, haz el cambio en 'formSchemaJson'. Si no menciona formularios, déjalo exactamente como está.
+6. Devuelve ÚNICAMENTE el JSON completo modificado. NO uses bloques de código ni agregues texto adicional.
+
+JSON ACTUAL DEL DIAGRAMA:
+{current_diagram_str}"""
+
+        try:
+            response = self.client.chat.completions.create(
+                model=self.model_complex,
+                response_format={"type": "json_object"},
+                messages=[
+                    {
+                        "role": "system",
+                        "content": system_prompt
+                    },
+                    {
+                        "role": "user",
+                        "content": request.prompt
+                    }
+                ]
+            )
+            response_text = response.choices[0].message.content.strip()
+            
+            if response_text.startswith("```json"):
+                response_text = response_text[7:]
+            if response_text.startswith("```"):
+                response_text = response_text[3:]
+            if response_text.endswith("```"):
+                response_text = response_text[:-3]
+                
+            return json.loads(response_text.strip())
+        except Exception as e:
+            raise HTTPException(status_code=503, detail=f"Error al modificar el diagrama con IA: {str(e)}")
 
     def _clean_json_response(self, text: str) -> str:
         text = text.strip()
@@ -218,14 +265,16 @@ Devuelve ÚNICAMENTE el JSON representando este proceso, detectando todos los fo
                     {
                         "role": "system",
                         "content": (
-                            "Eres un clasificador de intenciones para una aplicación de gestión de flujos de trabajo. "
-                            "Tu tarea es analizar el texto hablado por el usuario y devolver ÚNICAMENTE un JSON con el campo 'intent'. "
-                            "Las intenciones posibles son:\n"
-                            "- 'navigate': El usuario quiere ir a otra pantalla/sección (ej: 'llévame a mis tareas', 'quiero ver el dashboard', 'ir a políticas').\n"
-                            "- 'open_create_policy': El usuario quiere crear/agregar UNA NUEVA política vacía para empezar a diseñarla (ej: 'quiero crear una nueva política', 'crear una política', 'nueva política', 'agregar una política', 'quiero hacer una nueva política'). Usar SOLO cuando claramente quiere abrir el formulario de creación, no cuando quiere generar el diagrama internamente.\n"
-                            "- 'generate_policy': El usuario quiere generar automáticamente el diagrama/flujo de una política ya creada, describiendo el proceso (ej: 'quiero una política para gestión de vacaciones', 'genera un flujo de aprobación de compras', 'diseña el proceso de contratación', 'crea el diagrama para tramite X').\n"
-                            "- 'fill_form': El usuario quiere rellenar un formulario dictando datos concretos (ej: 'llena el formulario con...', 'el nombre es Carlos, la fecha es mañana', 'rellena con mis datos').\n"
-                            "- 'ask': Cualquier otra pregunta, consulta, pedido de ayuda o sugerencia (ej: '¿cómo funciona esto?', 'dame sugerencias', '¿qué debo hacer?', 'explícame...').\n"
+                            "Eres un clasificador de intenciones (Intent Classifier) para una aplicación de flujos de trabajo (BPMN).\n"
+                            "Tu única tarea es analizar el texto del usuario y clasificarlo en UNA de las siguientes intenciones. Debes devolver un JSON válido con la clave 'intent'.\n\n"
+                            "Intenciones permitidas:\n"
+                            "- 'navigate': Ir a otra sección de la aplicación (ej: 'llévame al dashboard').\n"
+                            "- 'open_create_policy': El usuario indica que quiere CREAR una NUEVA política (ej: 'crear nueva política').\n"
+                            "- 'generate_policy': El usuario pide generar un diagrama/flujo desde cero (ej: 'genera un flujo para compras').\n"
+                            "- 'modify_diagram': El usuario da instrucciones para ALTERAR, EDITAR, AGREGAR, o ELIMINAR elementos del diagrama existente. INCLUYE frases como 'agrega una actividad', 'agrega un grid', 'edita las conexiones', 'conecta A con B', 'elimina el nodo'. ¡CUALQUIER comando para cambiar el diagrama pertenece aquí, NO ES UNA PREGUNTA!\n"
+                            "- 'fill_form': Llenar un formulario con datos.\n"
+                            "- 'ask': Solo para cuando el usuario hace una pregunta informativa general que NO implica alterar el sistema ni modificar el diagrama (ej: '¿cómo funciona esto?').\n\n"
+                            "REGLA DE ORO: Si el texto dice 'agrega', 'edita', 'conecta', 'modifica', o 'elimina' algo del diagrama, la intención DEBE SER 'modify_diagram' y JAMÁS 'ask'.\n"
                             "Responde SOLO con JSON: {\"intent\": \"<valor>\"}"
                         )
                     },
@@ -238,7 +287,14 @@ Devuelve ÚNICAMENTE el JSON representando este proceso, detectando todos los fo
             clean_text = self._clean_json_response(response.choices[0].message.content)
             result = json.loads(clean_text)
             intent = result.get("intent", "ask")
-            if intent not in ("navigate", "generate_policy", "fill_form", "ask", "open_create_policy"):
+            
+            # Hardcoded fallback to guarantee modify_diagram on explicit commands
+            text_lower = request.spoken_text.lower()
+            mod_verbs = ["agrega ", "agregar ", "edita ", "editar ", "modifica ", "modificar ", "conecta ", "conectar ", "elimina ", "eliminar ", "cambia ", "cambiar ", "pon ", "añade ", "quita ", "añadir ", "quitar "]
+            if intent == "ask" and any(verb in text_lower for verb in mod_verbs):
+                intent = "modify_diagram"
+
+            if intent not in ("navigate", "generate_policy", "fill_form", "ask", "open_create_policy", "modify_diagram"):
                 intent = "ask"
             return {"intent": intent, "spoken_text": request.spoken_text}
         except json.JSONDecodeError:

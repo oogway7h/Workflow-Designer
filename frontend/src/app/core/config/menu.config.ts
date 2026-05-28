@@ -11,6 +11,7 @@ import {
   History,
   Bot,
   Bell,
+  FolderOpen
 } from 'lucide-angular';
 
 export type UserRole = 'ADMIN' | 'DESIGNER' | 'MANAGER' | 'EMPLOYEE' | 'CUSTOMER';
@@ -107,7 +108,13 @@ export const MENU_CONFIG: MenuItem[] = [
     icon: History,
     roles: ['EMPLOYEE'],
   },
-
+  // Documentos
+  {
+    path: '/app/documents',
+    label: 'Documentos',
+    icon: FolderOpen,
+    roles: ['ADMIN', 'DESIGNER', 'MANAGER', 'EMPLOYEE', 'CUSTOMER'],
+  },
 ];
 
 export function getMenuItemsForRole(role: UserRole): MenuItem[] {

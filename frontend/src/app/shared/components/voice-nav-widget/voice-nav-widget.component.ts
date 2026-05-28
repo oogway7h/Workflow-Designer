@@ -175,6 +175,7 @@ export class VoiceNavWidgetComponent {
             this.handleOpenCreatePolicy();
             break;
           case 'generate_policy':
+          case 'modify_diagram':
             this.handleGeneratePolicy(spokenText);
             break;
           case 'fill_form':

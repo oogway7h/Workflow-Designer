@@ -22,6 +22,14 @@ export const routes: Routes = [
             (m) => m.DASHBOARD_ROUTES
           ),
       },
+      {
+        path: 'documents',
+        loadChildren: () =>
+          import('./features/documents/documents.routes').then(
+            (m) => m.DOCUMENTS_ROUTES
+          ),
+      },
+
 
       // Admin routes
       {
