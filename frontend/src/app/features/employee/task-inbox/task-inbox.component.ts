@@ -2,6 +2,8 @@ import { Component, inject, signal, OnInit } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { RouterModule } from '@angular/router';
 import { PolicyService } from '../../../core/services/policy.service';
+import { IndexedDbService } from '../../../core/services/indexed-db.service';
+import { OfflineSyncService } from '../../../core/services/offline-sync.service';
 import { LucideAngularModule, Inbox, Clock, AlertCircle, CheckCircle, FileText, User } from 'lucide-angular';
 import { LoaderComponent } from '../../../shared/components/loader/loader.component';
 
@@ -68,7 +70,12 @@ interface Task {
             <div class="flex-1 min-w-0">
               <div class="flex items-start justify-between">
                 <div class="min-w-0 flex-1">
-                  <h3 class="font-semibold text-foreground group-hover:text-primary transition-colors truncate">Actividad: {{ task.taskName || task.title || task.activityId || 'Tarea Asignada' }}</h3>
+                  <h3 class="font-semibold text-foreground group-hover:text-primary transition-colors truncate flex items-center gap-2">
+                    Actividad: {{ task.taskName || task.title || task.activityId || 'Tarea Asignada' }}
+                    @if (task.isFromCache) {
+                      <span class="inline-flex items-center rounded-md bg-rose-400/10 px-2 py-0.5 text-[10px] font-medium text-rose-400 ring-1 ring-inset ring-rose-400/20">Caché Offline</span>
+                    }
+                  </h3>
                   <p class="text-sm text-muted-foreground mt-1">Política: {{ task.policyName || task.processName || 'Flujo de Trabajo' }}</p>
                   <p class="text-xs text-muted-foreground mt-2">{{ task.description || 'Completar los campos requeridos para avanzar el flujo.' }}</p>
                 </div>
@@ -111,17 +118,41 @@ export class TaskInboxComponent implements OnInit {
   readonly User = User;
 
   private readonly policyService = inject(PolicyService);
+  private readonly indexedDb = inject(IndexedDbService);
+  private readonly offlineSync = inject(OfflineSyncService);
 
   tasks = signal<any[]>([]);
   isLoading = signal<boolean>(true);
 
   ngOnInit(): void {
     setTimeout(() => {
-      this.policyService.getPendingTasks().subscribe((tasks) => {
-        this.tasks.set(tasks);
-        this.isLoading.set(false);
-      });
+      if (!this.offlineSync.isOnline) {
+        this.loadTasksFromCache();
+      } else {
+        this.policyService.getPendingTasks().subscribe({
+          next: (tasks) => {
+            this.tasks.set(tasks);
+            this.indexedDb.saveTasksCache(tasks).catch(err => console.error('Error caching tasks:', err));
+            this.isLoading.set(false);
+          },
+          error: (err) => {
+            console.error('Error fetching tasks, falling back to cache:', err);
+            this.loadTasksFromCache();
+          }
+        });
+      }
     }, 1500);
+  }
+
+  private loadTasksFromCache() {
+    this.indexedDb.getTasksCache().then(cachedTasks => {
+      const markedTasks = cachedTasks.map(t => ({ ...t, isFromCache: true }));
+      this.tasks.set(markedTasks);
+      this.isLoading.set(false);
+    }).catch(err => {
+      console.error('Failed to load tasks from cache:', err);
+      this.isLoading.set(false);
+    });
   }
 
   getPriorityBadgeClass(priority: string): string {

@@ -1,9 +1,10 @@
-﻿import { Component, inject, OnInit, signal } from '@angular/core';
+import { Component, inject, OnInit, signal } from '@angular/core';
 import { CommonModule, KeyValuePipe } from '@angular/common';
 import { ActivatedRoute, Router } from '@angular/router';
 import { FormsModule } from '@angular/forms';
-import { LucideAngularModule, ArrowLeft, CheckCircle, FileText, User, Clock, Save, AlertTriangle } from 'lucide-angular';
+import { LucideAngularModule, ArrowLeft, CheckCircle, FileText, User, Clock, Save, AlertTriangle, Download, UploadCloud } from 'lucide-angular';
 import { PolicyService } from '../../../core/services/policy.service';
+import { DocumentService } from '../../../core/services/document.service';
 import { LoaderComponent } from '../../../shared/components/loader/loader.component';
 import { ToastService } from '../../../shared/services/toast.service';
 
@@ -144,6 +145,88 @@ import { ToastService } from '../../../shared/services/toast.service';
                        </div>
                      }
                   }
+
+                 <!-- Document View Section for Manager if allowed or if documents exist -->
+                 @if (taskDetails()?.allowFileUpload || uploadedDocuments().length > 0 || (taskDetails()?.requiredDocuments && taskDetails()?.requiredDocuments.length > 0)) {
+                   <div class="mt-6 border-t pt-4 space-y-4">
+                      <h4 class="text-sm font-semibold text-foreground flex items-center gap-2">
+                         <lucide-icon [img]="UploadCloudIcon" [size]="16" class="text-primary" /> Documentación Solicitada
+                      </h4>
+                      
+                      <!-- Configured Requirements list -->
+                      @if (taskDetails()?.requiredDocuments && taskDetails()?.requiredDocuments.length > 0) {
+                        <div class="space-y-3">
+                          @for (req of taskDetails()?.requiredDocuments; track req.name) {
+                            <div class="rounded-lg border border-border bg-card p-3 shadow-sm hover:shadow-md transition-all">
+                              <div class="flex items-start justify-between gap-4">
+                                <div class="space-y-1">
+                                  <div class="flex items-center gap-2">
+                                    <span class="text-sm font-semibold text-foreground">{{ req.name }}</span>
+                                    @if (req.required) {
+                                      <span class="text-[10px] font-semibold bg-destructive/10 text-destructive px-1.5 py-0.5 rounded">Obligatorio</span>
+                                    } @else {
+                                      <span class="text-[10px] font-semibold bg-muted text-muted-foreground px-1.5 py-0.5 rounded">Opcional</span>
+                                    }
+                                    
+                                    @if (getUploadedDocForRequirement(req.name)) {
+                                      <span class="text-[10px] font-semibold bg-emerald-500/10 text-emerald-500 px-1.5 py-0.5 rounded flex items-center gap-1">
+                                        <span class="h-1.5 w-1.5 rounded-full bg-emerald-500"></span> Cargado
+                                      </span>
+                                    } @else {
+                                      <span class="text-[10px] font-semibold bg-amber-500/10 text-amber-500 px-1.5 py-0.5 rounded flex items-center gap-1">
+                                        <span class="h-1.5 w-1.5 rounded-full bg-amber-500 animate-pulse"></span> Pendiente
+                                      </span>
+                                    }
+                                  </div>
+                                  @if (req.description) {
+                                    <p class="text-xs text-muted-foreground">{{ req.description }}</p>
+                                  }
+                                </div>
+                                
+                                <div class="flex items-center gap-1 shrink-0">
+                                  @if (getUploadedDocForRequirement(req.name); as doc) {
+                                    <button (click)="downloadDocument(doc.uuid, doc.fileName)" type="button" class="h-8 w-8 inline-flex items-center justify-center rounded-lg border border-border text-muted-foreground hover:bg-primary/10 hover:text-primary transition-colors" title="Descargar">
+                                      <lucide-icon [img]="DownloadIcon" [size]="14" />
+                                    </button>
+                                  }
+                                </div>
+                              </div>
+                              
+                              @if (getUploadedDocForRequirement(req.name); as doc) {
+                                <div class="mt-2 flex items-center gap-1.5 text-[11px] text-muted-foreground bg-muted/40 rounded px-2 py-1">
+                                  <lucide-icon [img]="FileText" [size]="12" class="text-primary shrink-0" />
+                                  <span class="truncate font-medium">{{ doc.fileName }}</span>
+                                  <span class="shrink-0">({{ doc.uploaderName || 'Sistema' }})</span>
+                                </div>
+                              }
+                            </div>
+                          }
+                        </div>
+                      } @else {
+                        <!-- Fallback general -->
+                        @if (uploadedDocuments().length > 0) {
+                          <div class="space-y-2">
+                            @for (doc of uploadedDocuments(); track doc.uuid) {
+                              <div class="flex items-center justify-between p-2.5 rounded-lg border border-border bg-muted/20 text-xs">
+                                <div class="flex items-center gap-2 min-w-0">
+                                  <lucide-icon [img]="FileText" [size]="14" class="text-primary shrink-0" />
+                                  <span class="font-medium text-foreground truncate" [title]="doc.fileName">{{ doc.fileName }}</span>
+                                  <span class="text-muted-foreground text-[10px]">({{ doc.uploaderName || 'Sistema' }})</span>
+                                </div>
+                                <div class="flex items-center gap-1">
+                                  <button (click)="downloadDocument(doc.uuid, doc.fileName)" type="button" class="h-6 w-6 inline-flex items-center justify-center rounded text-muted-foreground hover:bg-primary/10 hover:text-primary transition-colors" title="Descargar">
+                                    <lucide-icon [img]="DownloadIcon" [size]="13" />
+                                  </button>
+                                </div>
+                              </div>
+                            }
+                          </div>
+                        } @else {
+                          <p class="text-xs text-muted-foreground italic">No se han subido documentos aún para esta actividad.</p>
+                        }
+                      }
+                   </div>
+                 }
                </div>
             </div>
           </div>
@@ -213,11 +296,14 @@ export class InstanceTaskDetailComponent implements OnInit {
   readonly Clock = Clock;
   readonly Save = Save;
   readonly AlertTriangle = AlertTriangle;
+  readonly DownloadIcon = Download;
+  readonly UploadCloudIcon = UploadCloud;
 
   private readonly route = inject(ActivatedRoute);
   private readonly router = inject(Router);
   private readonly policyService = inject(PolicyService);
   private readonly toast = inject(ToastService);
+  private readonly documentService = inject(DocumentService);
 
   instanceId = signal<string>('');
   taskId = signal<string>('');
@@ -226,6 +312,7 @@ export class InstanceTaskDetailComponent implements OnInit {
   isLoading = signal<boolean>(true);
   error = signal<string>('');
   isSubmitting = signal<boolean>(false);
+  uploadedDocuments = signal<any[]>([]);
 
   formData: Record<string, any> = {};
 
@@ -235,6 +322,7 @@ export class InstanceTaskDetailComponent implements OnInit {
 
     if (this.instanceId()) {
       this.loadDetails(this.instanceId());
+      this.loadUploadedDocuments(this.instanceId());
     } else {
       this.error.set('No se especificó ningún ID de instancia válido.');
       this.isLoading.set(false);
@@ -279,6 +367,40 @@ export class InstanceTaskDetailComponent implements OnInit {
         }
       });
     }, 1500);
+  }
+
+  loadUploadedDocuments(instanceId: string): void {
+    this.documentService.getByPolicy(instanceId).subscribe({
+      next: (docs) => {
+        this.uploadedDocuments.set(docs);
+      },
+      error: (err) => {
+        console.error('Error fetching uploaded documents', err);
+      }
+    });
+  }
+
+  getUploadedDocForRequirement(reqName: string): any {
+    return this.uploadedDocuments().find(doc => doc.requirementName === reqName);
+  }
+
+  downloadDocument(docUuid: string, fileName: string): void {
+    this.documentService.download(docUuid).subscribe({
+      next: (blob) => {
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = fileName;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        window.URL.revokeObjectURL(url);
+      },
+      error: (err) => {
+        console.error('Error downloading document', err);
+        this.toast.error('Error al descargar el archivo');
+      }
+    });
   }
 
   submitTask(): void {

@@ -6,8 +6,10 @@ export interface Document {
   uploadedByUserId: string;
   uploaderName: string;
   policyId?: string;
+  customerId?: string;
   createdAt: string;
   downloadUrl?: string;
+  requirementName?: string;
 }
 
 export interface DocumentAudit {
@@ -23,4 +25,5 @@ export interface DocumentUploadResponse {
   uuid: string;
   fileName: string;
   message: string;
+  requirementName?: string;
 }

@@ -1,5 +1,9 @@
 from fastapi import APIRouter
-from domain.models import NlpNavigateRequest, NlpNavigateResponse, NlpFillFormRequest, NlpFillFormResponse, NlpIntentRequest, NlpIntentResponse
+from domain.models import (
+    NlpNavigateRequest, NlpNavigateResponse, NlpFillFormRequest, NlpFillFormResponse,
+    NlpIntentRequest, NlpIntentResponse, NlpCompileReportRequest, NlpCompileReportResponse,
+    NlpAnalyzeDataRequest, NlpAnalyzeDataResponse
+)
 from application.ai_service import AIService
 
 nlp_router = APIRouter(prefix="/nlp", tags=["NLP"])
@@ -31,3 +35,22 @@ async def nlp_fill_form(request: NlpFillFormRequest):
     """
     result = ai_service.nlp_fill_form(request)
     return NlpFillFormResponse(filled_form=result.get("filled_form", {}))
+
+
+@nlp_router.post("/compile-report", response_model=NlpCompileReportResponse, summary="NLP - Compilador de Reportes y KPIs")
+async def nlp_compile_report(request: NlpCompileReportRequest):
+    """
+    Recibe un prompt en lenguaje natural y genera la estructura JSON (pipeline, columnas, KPIs) para un reporte.
+    """
+    result = ai_service.compile_report(request)
+    return NlpCompileReportResponse(**result)
+
+
+@nlp_router.post("/analyze-data", response_model=NlpAnalyzeDataResponse, summary="NLP - Análisis Cognitivo de Datos del Reporte")
+async def nlp_analyze_data(request: NlpAnalyzeDataRequest):
+    """
+    Recibe la pregunta del usuario y los datos del reporte para realizar un análisis textual.
+    """
+    result = ai_service.analyze_report_data(request)
+    return NlpAnalyzeDataResponse(**result)
+

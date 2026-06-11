@@ -1,7 +1,7 @@
 import { Component, signal, inject, ViewChild, ElementRef, AfterViewChecked, effect } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
-import { Bot, X, Send, User, ChevronDown, BotMessageSquare,Pointer,BadgeInfo } from 'lucide-angular';
+import { Bot, X, Send, User, ChevronDown, BotMessageSquare, Pointer, BadgeInfo } from 'lucide-angular';
 import { LucideAngularModule } from 'lucide-angular';
 import { AiChatService, AIChatRequest } from '../../../core/services/ai-chat.service';
 import { AuthService } from '../../../core/services/auth.service';
@@ -10,8 +10,6 @@ import { Router } from '@angular/router';
 import { finalize } from 'rxjs/operators';
 import { NlpService } from '../../../core/services/nlp.service';
 import { PolicyActionsService } from '../../../core/services/policy-actions.service';
-
-
 
 interface Message {
   text: string;
@@ -153,7 +151,7 @@ export class AiChatWidgetComponent implements AfterViewChecked {
         this.userInput = pending;
         setTimeout(() => this.sendMessage(), 100);
       }
-    });
+    }, { allowSignalWrites: true });
 
     // When voice widget sends a policy generation message, use the generate-policy endpoint
     effect(() => {
@@ -165,8 +163,10 @@ export class AiChatWidgetComponent implements AfterViewChecked {
         this.userInput = pending;
         setTimeout(() => this.sendPolicyMessage(), 100);
       }
-    });
+    }, { allowSignalWrites: true });
   }
+
+
 
   toggleChat() {
     this.isOpen.update(v => !v);
@@ -197,7 +197,18 @@ export class AiChatWidgetComponent implements AfterViewChecked {
     this.nlpService.detectIntent(currentPrompt, this.router.url).subscribe({
       next: (res) => {
         if (res.intent === 'generate_policy') {
-          this._executePolicyMessage(currentPrompt, userRole, false);
+          // If user sends a short confirmation like "créalo", enrich with last bot context
+          let enrichedPrompt = currentPrompt;
+          const promptLower = currentPrompt.toLowerCase().trim();
+          const shortCommands = ['crealo', 'créalo', 'hazlo', 'generalo', 'genéralo', 'dale', 'procede', 'si crealo', 'sí créalo', 'si hazlo', 'sí hazlo'];
+          if (shortCommands.includes(promptLower) || promptLower.length < 15) {
+            const msgs = this.messages();
+            const lastBotMsg = [...msgs].reverse().find(m => !m.isUser);
+            if (lastBotMsg) {
+              enrichedPrompt = `Genera el diagrama BPMN completo para el siguiente proceso descrito previamente:\n\n${lastBotMsg.text}`;
+            }
+          }
+          this._executePolicyMessage(enrichedPrompt, userRole, false);
         } else if (res.intent === 'modify_diagram') {
           this._executePolicyMessage(currentPrompt, userRole, true);
         } else if (res.intent === 'open_create_policy') {

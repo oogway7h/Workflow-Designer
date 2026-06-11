@@ -94,6 +94,6 @@ public class NotificationService {
         String email = SecurityContextHolder.getContext().getAuthentication().getName();
         return userRepository.findByEmail(email)
                 .map(User::getUuid)
-                .orElseThrow(() -> new RuntimeException("Usuario autenticado no encontrado"));
+                .orElseThrow(() -> new org.springframework.security.authentication.BadCredentialsException("Usuario autenticado no encontrado"));
     }
 }

@@ -19,6 +19,7 @@ import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 
+import com.primer.parcialse.infrastructure.repository.UserRepository;
 import java.io.IOException;
 import java.util.List;
 import java.util.Map;
@@ -31,22 +32,29 @@ public class DocumentController {
 
     private final DocumentService documentService;
     private final DocumentAuditService documentAuditService;
+    private final UserRepository userRepository;
 
     @PostMapping(value = "/upload", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     @Operation(summary = "Upload a document")
     public ResponseEntity<DocumentUploadResponseDTO> upload(
             @RequestParam("file") MultipartFile file,
             @RequestParam(value = "policyId", required = false) String policyId,
-            @RequestParam(value = "customerId", required = false) String customerId) {
+            @RequestParam(value = "customerId", required = false) String customerId,
+            @RequestParam(value = "requirementName", required = false) String requirementName) {
         try {
             Authentication auth = SecurityContextHolder.getContext().getAuthentication();
             String userEmail = auth != null ? auth.getName() : "anonymous";
-            // In a real scenario we extract UUID and Name from DB using userEmail
-            // Using placeholder for now
-            String userId = "current-user-uuid"; 
+            
+            // Get actual user UUID from database based on authenticated email
+            String userId = userRepository.findByEmail(userEmail)
+                    .map(com.primer.parcialse.domain.model.User::getUuid)
+                    .orElse("current-user-uuid");
             String userName = userEmail;
 
-            DocumentResponseDTO doc = documentService.upload(file, policyId, customerId, userId, userName);
+            // Default customerId to user's UUID if not specified
+            String finalCustomerId = (customerId != null && !customerId.isEmpty()) ? customerId : userId;
+
+            DocumentResponseDTO doc = documentService.upload(file, policyId, finalCustomerId, requirementName, userId, userName);
             
             DocumentUploadResponseDTO response = DocumentUploadResponseDTO.builder()
                     .uuid(doc.getUuid())

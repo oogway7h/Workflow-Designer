@@ -47,5 +47,7 @@ public class AutoAssignPolicyRequestDTO {
         private int currentPendingTasks;
         @JsonProperty("avg_completion_hours")
         private double avgCompletionHours;
+        @JsonProperty("department_id")
+        private String departmentId;
     }
 }

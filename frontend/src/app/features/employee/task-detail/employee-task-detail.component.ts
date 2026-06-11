@@ -2,12 +2,15 @@ import { Component, inject, OnInit, signal } from '@angular/core';
 import { CommonModule, KeyValuePipe } from '@angular/common';
 import { ActivatedRoute, Router } from '@angular/router';
 import { FormsModule } from '@angular/forms';
-import { LucideAngularModule, ArrowLeft, CheckCircle, FileText, User, Clock, Save, AlertTriangle, WandSparkles, Mic, Loader, Trash2, Plus } from 'lucide-angular';
+import { LucideAngularModule, ArrowLeft, CheckCircle, FileText, User, Clock, Save, AlertTriangle, WandSparkles, Mic, Loader, Trash2, Plus, Download, UploadCloud } from 'lucide-angular';
 import { PolicyService } from '../../../core/services/policy.service';
 import { LoaderComponent } from '../../../shared/components/loader/loader.component';
 import { ToastService } from '../../../shared/services/toast.service';
 import { AiChatService } from '../../../core/services/ai-chat.service';
 import { AuthService } from '../../../core/services/auth.service';
+import { DocumentService } from '../../../core/services/document.service';
+import { IndexedDbService } from '../../../core/services/indexed-db.service';
+import { OfflineSyncService } from '../../../core/services/offline-sync.service';
 
 @Component({
   selector: 'app-employee-task-detail',
@@ -206,28 +209,131 @@ import { AuthService } from '../../../core/services/auth.service';
                            }
                         </div>
                      }
-                     
-                     <!-- Acción -->
-                     @if (isTaskPending()) {
-                       <div class="pt-4 border-t mt-6 flex justify-end">
-                          <button (click)="submitTask()" [disabled]="isSubmitting()" class="flex items-center justify-center gap-2 rounded-lg bg-primary px-4 py-2 font-medium text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-50">
-                            @if (isSubmitting()) {
-                              <lucide-icon [img]="Clock" [size]="18" class="animate-spin" /> Procesando...
-                            } @else {
-                              <lucide-icon [img]="Save" [size]="18" /> Completar Tarea
-                            }
-                          </button>
-                       </div>
-                     }
                   } @else {
                      <p class="text-sm text-muted-foreground italic">No hay campos configurados para esta tarea.</p>
-                     @if (isTaskPending()) {
-                       <div class="pt-4 flex justify-end mt-4 border-t">
-                          <button (click)="submitTask()" [disabled]="isSubmitting()" class="flex items-center justify-center gap-2 rounded-lg bg-primary px-4 py-2 font-medium text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-50">
-                            <lucide-icon [img]="CheckCircle" [size]="18" /> Marcar como Completado
-                          </button>
-                       </div>
-                     }
+                  }
+
+                  <!-- Document Upload Section -->
+                  @if (isTaskPending() || uploadedDocuments().length > 0 || (taskDetails()?.requiredDocuments && taskDetails()?.requiredDocuments.length > 0)) {
+                    <div class="mt-6 border-t pt-4 space-y-4">
+                       <h4 class="text-sm font-semibold text-foreground flex items-center gap-2">
+                          <lucide-icon [img]="UploadCloudIcon" [size]="16" class="text-primary" /> Documentación
+                       </h4>
+                       <!-- Configured Requirements list -->
+                       @if (taskDetails()?.requiredDocuments && taskDetails()?.requiredDocuments.length > 0) {
+                         <div class="space-y-3">
+                           @for (req of taskDetails()?.requiredDocuments; track req.name) {
+                             <div class="rounded-lg border border-border bg-card p-3 shadow-sm transition-all hover:shadow-md">
+                               <div class="flex items-start justify-between gap-4">
+                                 <div class="space-y-1">
+                                   <div class="flex items-center gap-2">
+                                     <span class="text-sm font-semibold text-foreground">{{ req.name }}</span>
+                                     @if (req.required) {
+                                       <span class="text-[10px] font-semibold bg-destructive/10 text-destructive px-1.5 py-0.5 rounded">Obligatorio</span>
+                                     } @else {
+                                       <span class="text-[10px] font-semibold bg-muted text-muted-foreground px-1.5 py-0.5 rounded">Opcional</span>
+                                     }
+                                     
+                                     @if (getUploadedDocForRequirement(req.name)) {
+                                       <span class="text-[10px] font-semibold bg-emerald-500/10 text-emerald-500 px-1.5 py-0.5 rounded flex items-center gap-1">
+                                         <span class="h-1.5 w-1.5 rounded-full bg-emerald-500"></span> Cargado
+                                       </span>
+                                     } @else {
+                                       <span class="text-[10px] font-semibold bg-amber-500/10 text-amber-500 px-1.5 py-0.5 rounded flex items-center gap-1">
+                                         <span class="h-1.5 w-1.5 rounded-full bg-amber-500 animate-pulse"></span> Pendiente
+                                       </span>
+                                     }
+                                   </div>
+                                   @if (req.description) {
+                                     <p class="text-xs text-muted-foreground">{{ req.description }}</p>
+                                   }
+                                 </div>
+                                 
+                                 <div class="flex items-center gap-1 shrink-0">
+                                   @if (getUploadedDocForRequirement(req.name); as doc) {
+                                     <button (click)="downloadDocument(doc.uuid, doc.fileName)" type="button" class="h-8 w-8 inline-flex items-center justify-center rounded-lg border border-border text-muted-foreground hover:bg-primary/10 hover:text-primary transition-colors" title="Descargar">
+                                       <lucide-icon [img]="DownloadIcon" [size]="14" />
+                                     </button>
+                                     @if (isTaskPending()) {
+                                       <button (click)="deleteDocument(doc.uuid)" type="button" class="h-8 w-8 inline-flex items-center justify-center rounded-lg border border-border text-muted-foreground hover:bg-destructive/10 hover:text-destructive transition-colors" title="Eliminar">
+                                         <lucide-icon [img]="TrashIcon" [size]="14" />
+                                       </button>
+                                     }
+                                   } @else if (isTaskPending()) {
+                                     <label class="cursor-pointer inline-flex h-8 items-center gap-1.5 rounded-lg border border-primary/50 bg-primary/5 px-3 py-1.5 text-xs font-semibold text-primary hover:bg-primary/10 transition-colors focus-within:ring-2 focus-within:ring-primary/20">
+                                       <lucide-icon [img]="UploadCloudIcon" [size]="14" [class.animate-pulse]="isUploadingRequirement(req.name)" />
+                                       {{ isUploadingRequirement(req.name) ? 'Subiendo...' : 'Subir archivo' }}
+                                       <input type="file" (change)="onRequirementFileSelected($event, req.name)" [disabled]="isUploadingRequirement(req.name)" class="sr-only" />
+                                     </label>
+                                   }
+                                 </div>
+                               </div>
+                               
+                               @if (getUploadedDocForRequirement(req.name); as doc) {
+                                 <div class="mt-2 flex items-center gap-1.5 text-[11px] text-muted-foreground bg-muted/40 rounded px-2 py-1">
+                                   <lucide-icon [img]="FileText" [size]="12" class="text-primary shrink-0" />
+                                   <span class="truncate font-medium">{{ doc.fileName }}</span>
+                                   <span class="shrink-0">({{ doc.uploaderName || 'Sistema' }})</span>
+                                 </div>
+                               }
+                             </div>
+                           }
+                         </div>
+                       } @else {
+                         <!-- Fallback general -->
+                         @if (uploadedDocuments().length > 0) {
+                           <div class="space-y-2">
+                             @for (doc of uploadedDocuments(); track doc.uuid) {
+                               <div class="flex items-center justify-between p-2.5 rounded-lg border border-border bg-muted/20 text-xs">
+                                 <div class="flex items-center gap-2 min-w-0">
+                                   <lucide-icon [img]="FileText" [size]="14" class="text-primary shrink-0" />
+                                   <span class="font-medium text-foreground truncate" [title]="doc.fileName">{{ doc.fileName }}</span>
+                                   <span class="text-muted-foreground text-[10px]">({{ doc.uploaderName || 'Sistema' }})</span>
+                                 </div>
+                                 <div class="flex items-center gap-1">
+                                   <button (click)="downloadDocument(doc.uuid, doc.fileName)" type="button" class="h-6 w-6 inline-flex items-center justify-center rounded text-muted-foreground hover:bg-primary/10 hover:text-primary transition-colors" title="Descargar">
+                                     <lucide-icon [img]="DownloadIcon" [size]="13" />
+                                   </button>
+                                   @if (isTaskPending()) {
+                                     <button (click)="deleteDocument(doc.uuid)" type="button" class="h-6 w-6 inline-flex items-center justify-center rounded text-muted-foreground hover:bg-destructive/10 hover:text-destructive transition-colors" title="Eliminar">
+                                       <lucide-icon [img]="TrashIcon" [size]="13" />
+                                     </button>
+                                   }
+                                 </div>
+                               </div>
+                             }
+                           </div>
+                         } @else {
+                           <p class="text-xs text-muted-foreground italic">No se han subido documentos aún para esta actividad.</p>
+                         }
+
+                         <!-- Upload button -->
+                         @if (isTaskPending()) {
+                           <div class="flex items-center gap-4">
+                             <label class="cursor-pointer inline-flex items-center gap-1.5 rounded-lg border border-dashed border-primary/50 px-3 py-2 text-xs font-medium text-primary hover:bg-primary/5 transition-colors focus-within:ring-2 focus-within:ring-primary/20">
+                               <lucide-icon [img]="UploadCloudIcon" [size]="14" [class.animate-pulse]="isUploadingFile()" />
+                               {{ isUploadingFile() ? 'Subiendo...' : 'Subir archivo requerido' }}
+                               <input type="file" (change)="onFileSelected($event)" [disabled]="isUploadingFile()" class="sr-only" />
+                             </label>
+                             <span class="text-[10px] text-muted-foreground">Admite PDF, Word, Excel, Fotos y Videos.</span>
+                           </div>
+                         }
+                       }
+                    </div>
+                  }
+                 
+                  <!-- Acción -->
+                  @if (isTaskPending()) {
+                    <div class="pt-4 border-t mt-6 flex justify-end">
+                       <button (click)="submitTask()" [disabled]="isSubmitting()" class="flex items-center justify-center gap-2 rounded-lg bg-primary px-4 py-2 font-medium text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-50">
+                         @if (isSubmitting()) {
+                           <lucide-icon [img]="Clock" [size]="18" class="animate-spin" /> Procesando...
+                         } @else {
+                           <lucide-icon [img]="taskDetails()?.formSchemaJson?.fields?.length > 0 ? Save : CheckCircle" [size]="18" />
+                           {{ taskDetails()?.formSchemaJson?.fields?.length > 0 ? 'Completar Tarea' : 'Marcar como Completado' }}
+                         }
+                       </button>
+                    </div>
                   }
                </div>
             </div>
@@ -306,6 +412,13 @@ export class EmployeeTaskDetailComponent implements OnInit {
   readonly LoaderIcon = Loader;
   readonly TrashIcon = Trash2;
   readonly PlusIcon = Plus;
+  readonly DownloadIcon = Download;
+  readonly UploadCloudIcon = UploadCloud;
+
+  private readonly documentService = inject(DocumentService);
+  uploadedDocuments = signal<any[]>([]);
+  isUploadingFile = signal<boolean>(false);
+  uploadingRequirements = signal<Record<string, boolean>>({});
 
   private readonly route = inject(ActivatedRoute);
   private readonly router = inject(Router);
@@ -313,6 +426,8 @@ export class EmployeeTaskDetailComponent implements OnInit {
   private readonly toast = inject(ToastService);
   private readonly aiChatService = inject(AiChatService);
   private readonly authService = inject(AuthService);
+  private readonly indexedDb = inject(IndexedDbService);
+  private readonly offlineSync = inject(OfflineSyncService);
 
   instanceId = signal<string>('');
   
@@ -335,6 +450,7 @@ export class EmployeeTaskDetailComponent implements OnInit {
 
     if (this.instanceId()) {
       this.loadDetails(this.instanceId());
+      this.loadDetails(this.instanceId());
       this.loadHistory(this.instanceId());
     } else {
       this.error.set('No se especificó ningún ID de instancia válido.');
@@ -350,7 +466,9 @@ export class EmployeeTaskDetailComponent implements OnInit {
       this.policyService.getInstanceDetails(uuid).subscribe({
         next: (data) => {
           this.taskDetails.set(data);
+          this.indexedDb.saveTaskDetailsCache(uuid, data).catch(err => console.error('Error caching task details:', err));
           this.isLoading.set(false);
+          this.loadUploadedDocuments(data.policyId, data.applicantId);
           
           if (data.formSchemaJson?.fields) {
              data.formSchemaJson.fields.forEach((field: any) => {
@@ -367,15 +485,41 @@ export class EmployeeTaskDetailComponent implements OnInit {
           }
         },
         error: (err) => {
-          console.error('Error fetching task details', err);
-          this.error.set('Error al cargar los detalles de la tarea.');
-          this.isLoading.set(false);
+          console.error('Error fetching task details, checking cache:', err);
+          this.indexedDb.getTaskDetailsCache(uuid).then(cachedData => {
+            if (cachedData) {
+              this.taskDetails.set(cachedData);
+              this.isLoading.set(false);
+              this.loadUploadedDocuments(cachedData.policyId, cachedData.applicantId);
+              
+              if (cachedData.formSchemaJson?.fields) {
+                 cachedData.formSchemaJson.fields.forEach((field: any) => {
+                    if (field.type === 'boolean') {
+                       this.formData[field.name] = false;
+                    } else if (field.type === 'number') {
+                       this.formData[field.name] = 0;
+                    } else if (field.type === 'grid') {
+                       this.formData[field.name] = [];
+                    } else {
+                       this.formData[field.name] = '';
+                    }
+                 });
+              }
+            } else {
+              this.error.set('Error al cargar los detalles de la tarea.');
+              this.isLoading.set(false);
+            }
+          }).catch(() => {
+            this.error.set('Error al cargar los detalles de la tarea.');
+            this.isLoading.set(false);
+          });
         }
       });
     }, 1500);
   }
 
   loadHistory(uuid: string): void {
+    if (!this.offlineSync.isOnline) return;
     setTimeout(() => {
       this.policyService.getInstanceHistory(uuid).subscribe({
         next: (data) => {
@@ -390,7 +534,47 @@ export class EmployeeTaskDetailComponent implements OnInit {
 
   submitTask(): void {
     if (!this.instanceId() || this.isSubmitting()) return;
+
+    // Validate document requirements
+    const details = this.taskDetails();
+    if (details?.allowFileUpload && details?.requiredDocuments) {
+      const missingDocs = details.requiredDocuments
+        .filter((req: any) => req.required)
+        .filter((req: any) => !this.getUploadedDocForRequirement(req.name));
+      
+      if (missingDocs.length > 0) {
+        const missingNames = missingDocs.map((d: any) => d.name).join(', ');
+        this.toast.error(`Debes subir los siguientes documentos obligatorios: ${missingNames}`);
+        return;
+      }
+    }
+
     this.isSubmitting.set(true);
+
+    if (!this.offlineSync.isOnline) {
+      const localDocs = this.uploadedDocuments().filter(d => d.isLocal);
+      const filesToEnqueue = localDocs.map(d => ({
+        name: d.fileName,
+        type: d.contentType,
+        data: d.fileData
+      }));
+
+      this.indexedDb.enqueueRequest({
+        type: 'complete_task',
+        url: this.instanceId(),
+        payload: { taskData: this.formData, policyId: this.taskDetails()?.policyId || '' },
+        files: filesToEnqueue
+      }).then(() => {
+        this.isSubmitting.set(false);
+        this.showTaskCompletedModal.set(true);
+        this.toast.success('Tarea guardada localmente (modo offline)');
+      }).catch(err => {
+        console.error('Error enqueuing offline task:', err);
+        this.isSubmitting.set(false);
+        this.toast.error('Error al guardar la tarea localmente.');
+      });
+      return;
+    }
     
     setTimeout(() => {
       this.policyService.completeTask(this.instanceId(), { taskData: this.formData }).subscribe({
@@ -648,5 +832,181 @@ export class EmployeeTaskDetailComponent implements OnInit {
 
   removeGridRow(fieldName: string, rowIndex: number): void {
     this.formData[fieldName] = (this.formData[fieldName] as any[]).filter((_, i) => i !== rowIndex);
+  }
+
+  loadUploadedDocuments(policyId: string, customerId: string): void {
+    if (!this.offlineSync.isOnline) {
+      const locals = this.uploadedDocuments().filter(doc => doc.isLocal);
+      this.uploadedDocuments.set(locals);
+      return;
+    }
+    if (!customerId) return;
+    this.documentService.getByCustomer(customerId).subscribe({
+      next: (docs) => {
+        const policyDocs = docs.filter(d => d.policyId === policyId);
+        const locals = this.uploadedDocuments().filter(doc => doc.isLocal);
+        this.uploadedDocuments.set([...policyDocs, ...locals]);
+      },
+      error: (err) => {
+        console.error('Error fetching uploaded documents', err);
+      }
+    });
+  }
+
+  onFileSelected(event: any): void {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    const details = this.taskDetails();
+    if (!details) return;
+
+    if (!this.offlineSync.isOnline) {
+      this.readOfflineFile(file, '').then(mockDoc => {
+        this.uploadedDocuments.update(docs => [...docs, mockDoc]);
+        this.toast.success('Archivo guardado localmente para sincronizar.');
+        event.target.value = '';
+      });
+      return;
+    }
+
+    this.isUploadingFile.set(true);
+    this.documentService.upload(file, details.policyId, details.applicantId).subscribe({
+      next: () => {
+        this.isUploadingFile.set(false);
+        this.toast.success('Archivo subido correctamente');
+        this.loadUploadedDocuments(details.policyId, details.applicantId);
+        event.target.value = '';
+      },
+      error: (err) => {
+        console.error('Error uploading file', err);
+        this.isUploadingFile.set(false);
+        this.toast.error('Error al subir el archivo');
+      }
+    });
+  }
+
+  private readOfflineFile(file: File, reqName: string): Promise<any> {
+    return new Promise((resolve) => {
+      const reader = new FileReader();
+      reader.onload = (e: any) => {
+        const mockDoc = {
+          uuid: 'local_' + Math.random().toString(36).substring(2),
+          fileName: file.name,
+          contentType: file.type,
+          requirementName: reqName,
+          uploaderName: this.authService.currentUser()?.name || 'Local User',
+          isLocal: true,
+          fileData: e.target.result // Base64 dataURL
+        };
+        resolve(mockDoc);
+      };
+      reader.readAsDataURL(file);
+    });
+  }
+
+  private base64ToBlob(base64: string, type: string): Blob {
+    const parts = base64.split(';base64,');
+    const byteString = atob(parts.length > 1 ? parts[1] : parts[0]);
+    const ab = new ArrayBuffer(byteString.length);
+    const ia = new Uint8Array(ab);
+    for (let i = 0; i < byteString.length; i++) {
+      ia[i] = byteString.charCodeAt(i);
+    }
+    return new Blob([ab], { type });
+  }
+
+  downloadDocument(docUuid: string, fileName: string): void {
+    if (docUuid.startsWith('local_')) {
+      const doc = this.uploadedDocuments().find(d => d.uuid === docUuid);
+      if (doc) {
+        const blob = this.base64ToBlob(doc.fileData, doc.contentType);
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = fileName;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        window.URL.revokeObjectURL(url);
+      }
+      return;
+    }
+
+    this.documentService.download(docUuid).subscribe({
+      next: (blob) => {
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = fileName;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        window.URL.revokeObjectURL(url);
+      },
+      error: (err) => {
+        console.error('Error downloading document', err);
+        this.toast.error('Error al descargar el archivo');
+      }
+    });
+  }
+
+  deleteDocument(docUuid: string): void {
+    if (docUuid.startsWith('local_')) {
+      this.uploadedDocuments.update(docs => docs.filter(d => d.uuid !== docUuid));
+      this.toast.success('Documento local eliminado');
+      return;
+    }
+
+    this.documentService.delete(docUuid).subscribe({
+      next: () => {
+        this.toast.success('Documento eliminado');
+        const details = this.taskDetails();
+        if (details) this.loadUploadedDocuments(details.policyId, details.applicantId);
+      },
+      error: (err) => {
+        console.error('Error deleting document', err);
+        this.toast.error('Error al eliminar el documento');
+      }
+    });
+  }
+
+  getUploadedDocForRequirement(reqName: string): any {
+    return this.uploadedDocuments().find(doc => doc.requirementName === reqName);
+  }
+
+  isUploadingRequirement(reqName: string): boolean {
+    return !!this.uploadingRequirements()[reqName];
+  }
+
+  onRequirementFileSelected(event: any, reqName: string): void {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    const details = this.taskDetails();
+    if (!details) return;
+
+    if (!this.offlineSync.isOnline) {
+      this.readOfflineFile(file, reqName).then(mockDoc => {
+        this.uploadedDocuments.update(docs => [...docs, mockDoc]);
+        this.toast.success(`Archivo para "${reqName}" guardado localmente.`);
+        event.target.value = '';
+      });
+      return;
+    }
+
+    this.uploadingRequirements.update(state => ({ ...state, [reqName]: true }));
+    this.documentService.upload(file, details.policyId, details.applicantId, reqName).subscribe({
+      next: () => {
+        this.uploadingRequirements.update(state => ({ ...state, [reqName]: false }));
+        this.toast.success(`Archivo para "${reqName}" subido correctamente`);
+        this.loadUploadedDocuments(details.policyId, details.applicantId);
+        event.target.value = '';
+      },
+      error: (err) => {
+        console.error('Error uploading file for requirement', err);
+        this.uploadingRequirements.update(state => ({ ...state, [reqName]: false }));
+        this.toast.error('Error al subir el archivo');
+      }
+    });
   }
 }

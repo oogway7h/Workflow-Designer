@@ -181,6 +181,9 @@ export class VoiceNavWidgetComponent {
           case 'fill_form':
             this.handleFillForm(spokenText);
             break;
+          case 'compile_report':
+            this.handleCompileReport(spokenText);
+            break;
           case 'ask':
           default:
             this.handleAsk(spokenText);
@@ -195,6 +198,25 @@ export class VoiceNavWidgetComponent {
   }
 
   // ── Intent handlers ────────────────────────────────────────────────────────
+
+  private handleCompileReport(spokenText: string): void {
+    const role = this.authService.currentUser()?.role;
+    const isAuthorized = role === 'ADMIN' || role === 'MANAGER' || role === 'DESIGNER';
+
+    if (!isAuthorized) {
+      this.state.set('error');
+      this.statusMessage.set('No tienes permisos para ver o generar reportes.');
+      setTimeout(() => this.clearStatus(), 4000);
+      return;
+    }
+
+    this.state.set('idle');
+    this.statusMessage.set('Preparando tu reporte...');
+
+    this.router.navigate(['/app/reports'], { queryParams: { prompt: spokenText } }).then(() => {
+      setTimeout(() => this.clearStatus(), 1500);
+    });
+  }
 
   private handleNavigate(spokenText: string): void {
     this.nlpService.navigate(spokenText).subscribe({
@@ -324,6 +346,8 @@ export class VoiceNavWidgetComponent {
       '/my-instances': role === 'EMPLOYEE' ? '/app/employee/inbox' : '/app/manager/instances',
       '/history': role === 'EMPLOYEE' ? '/app/employee/history' : '/app/manager/history',
       '/catalog': '/app/dashboard',
+      '/documents': '/app/documents',
+      '/reports': '/app/reports',
     };
 
     return routeMap[route] ?? '/app/dashboard';

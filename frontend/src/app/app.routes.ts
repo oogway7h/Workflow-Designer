@@ -29,6 +29,12 @@ export const routes: Routes = [
             (m) => m.DOCUMENTS_ROUTES
           ),
       },
+      {
+        path: 'reports',
+        canActivate: [roleGuard(['ADMIN', 'MANAGER', 'EMPLOYEE', 'DESIGNER'])],
+        loadChildren: () =>
+          import('./features/reports/reports.routes').then((m) => m.REPORTS_ROUTES),
+      },
 
 
       // Admin routes

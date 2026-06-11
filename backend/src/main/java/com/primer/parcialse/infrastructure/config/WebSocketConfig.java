@@ -19,10 +19,22 @@ import org.springframework.web.socket.config.annotation.WebSocketMessageBrokerCo
 
 import java.util.ArrayList;
 
+import org.springframework.web.socket.server.standard.ServletServerContainerFactoryBean;
+import org.springframework.context.annotation.Bean;
+
 @Configuration
 @EnableWebSocketMessageBroker
 @RequiredArgsConstructor
 public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
+
+    @Bean
+    public ServletServerContainerFactoryBean createWebSocketContainer() {
+        ServletServerContainerFactoryBean container = new ServletServerContainerFactoryBean();
+        // Increase Tomcat websocket limits to 5MB
+        container.setMaxTextMessageBufferSize(5 * 1024 * 1024);
+        container.setMaxBinaryMessageBufferSize(5 * 1024 * 1024);
+        return container;
+    }
 
     private final JwtService jwtService;
 
@@ -41,6 +53,14 @@ public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
         registry.addEndpoint("/ws-workflow")
                 .setAllowedOriginPatterns("*")
                 .withSockJS();
+    }
+
+    @Override
+    public void configureWebSocketTransport(org.springframework.web.socket.config.annotation.WebSocketTransportRegistration registration) {
+        // Increase limits to 5MB to allow large Yjs FULL_STATE messages (documents with images/lots of text)
+        registration.setMessageSizeLimit(5 * 1024 * 1024);
+        registration.setSendBufferSizeLimit(5 * 1024 * 1024);
+        registration.setSendTimeLimit(20000);
     }
 
     @Override

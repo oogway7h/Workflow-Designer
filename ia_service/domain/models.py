@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field
-from typing import List
+from typing import List, Dict, Any
 
 class SuggestFieldRequest(BaseModel):
     policy_name: str
@@ -107,6 +107,7 @@ class EmployeeInfo(BaseModel):
     role_name: str | None = None
     current_pending_tasks: int = 0
     avg_completion_hours: float = 0.0
+    department_id: str | None = None
 
 class ActivityAssignment(BaseModel):
     activity_uuid: str
@@ -120,3 +121,29 @@ class AutoAssignPolicyRequest(BaseModel):
 
 class AutoAssignPolicyResponse(BaseModel):
     assignments: list[ActivityAssignment]
+
+
+class NlpCompileReportRequest(BaseModel):
+    prompt: str
+    error_context: str | None = None
+
+
+class NlpCompileReportResponse(BaseModel):
+    title: str
+    description: str
+    collection: str
+    pipeline: list
+    columns: list
+    kpis: list
+    chart: Dict[str, Any] | None = None
+
+
+class NlpAnalyzeDataRequest(BaseModel):
+    prompt: str
+    data: list
+
+
+class NlpAnalyzeDataResponse(BaseModel):
+    analysis: str
+
+

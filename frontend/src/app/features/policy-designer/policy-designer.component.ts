@@ -25,6 +25,12 @@ export interface FormSchema {
   fields: FormField[];
 }
 
+export interface RequiredDocument {
+  name: string;
+  description: string;
+  required: boolean;
+}
+
 export interface ActivityNode {
   uuid: string;
   name?: string;
@@ -34,6 +40,8 @@ export interface ActivityNode {
   x?: number;
   y?: number;
   laneId?: string;
+  allowFileUpload?: boolean;
+  requiredDocuments?: RequiredDocument[];
 }
 
 export interface Transition {
@@ -69,6 +77,8 @@ export interface CanvasNode {
   x: number;
   y: number;
   laneId: string;
+  allowFileUpload?: boolean;
+  requiredDocuments?: RequiredDocument[];
 }
 
 export interface Lane {
@@ -796,6 +806,59 @@ import { LoaderComponent } from '../../shared/components/loader/loader.component
                       class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm text-foreground font-mono focus:outline-none focus:ring-2 focus:ring-ring"
                       placeholder="monto:number&#10;justificacion:text"></textarea>
                   </div>
+                  <div class="flex items-center gap-2 mt-2">
+                    <input type="checkbox" id="allowFileUpload" [(ngModel)]="nodeForm.allowFileUpload" name="allowFileUpload" class="rounded border-input text-primary focus:ring-ring h-4 w-4 bg-background" />
+                    <label for="allowFileUpload" class="text-sm font-medium text-foreground cursor-pointer select-none">Permitir subir archivos / documentos en esta actividad</label>
+                  </div>
+
+                  @if (nodeForm.allowFileUpload) {
+                    <div class="border-t border-border mt-3 pt-3 space-y-2">
+                      <label class="block text-sm font-semibold text-foreground">Documentos Requeridos</label>
+                      
+                      <!-- Lista de documentos ya agregados -->
+                      @if (nodeForm.requiredDocuments && nodeForm.requiredDocuments.length > 0) {
+                        <div class="space-y-1.5 max-h-36 overflow-y-auto">
+                          @for (doc of nodeForm.requiredDocuments; track doc.name; let idx = $index) {
+                            <div class="flex items-center justify-between rounded-lg bg-accent/50 p-2 text-xs">
+                              <div>
+                                <span class="font-medium text-foreground">{{ doc.name }}</span>
+                                @if (doc.required) {
+                                  <span class="ml-1 text-[10px] bg-destructive/15 text-destructive font-semibold px-1 rounded">Obligatorio</span>
+                                } @else {
+                                  <span class="ml-1 text-[10px] bg-muted text-muted-foreground font-semibold px-1 rounded">Opcional</span>
+                                }
+                                @if (doc.description) {
+                                  <p class="text-muted-foreground text-[10px] mt-0.5">{{ doc.description }}</p>
+                                }
+                              </div>
+                              <button type="button" (click)="removeRequiredDoc(idx)" class="text-muted-foreground hover:text-destructive">
+                                <lucide-icon [img]="Trash2" [size]="14" />
+                              </button>
+                            </div>
+                          }
+                        </div>
+                      } @else {
+                        <p class="text-xs text-muted-foreground italic">Ningún documento configurado aún.</p>
+                      }
+
+                      <!-- Formulario para agregar documento -->
+                      <div class="rounded-lg border border-dashed border-input p-3 space-y-2 mt-2 bg-background/50">
+                        <div class="flex gap-2">
+                          <input type="text" [(ngModel)]="newDocName" name="newDocName" placeholder="Nombre (ej: CV)" class="flex-1 rounded border border-input bg-background px-2 py-1 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-ring" />
+                          <input type="text" [(ngModel)]="newDocDesc" name="newDocDesc" placeholder="Descripción" class="flex-1 rounded border border-input bg-background px-2 py-1 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-ring" />
+                        </div>
+                        <div class="flex items-center justify-between">
+                          <div class="flex items-center gap-1.5">
+                            <input type="checkbox" id="newDocRequired" [(ngModel)]="newDocRequired" name="newDocRequired" class="rounded border-input text-primary h-3.5 w-3.5 bg-background" />
+                            <label for="newDocRequired" class="text-xs text-foreground cursor-pointer select-none">Obligatorio</label>
+                          </div>
+                          <button type="button" (click)="addRequiredDoc()" class="inline-flex items-center gap-1 rounded bg-secondary hover:bg-secondary/80 px-2.5 py-1.5 text-xs font-medium text-secondary-foreground">
+                            <lucide-icon [img]="Plus" [size]="12" /> Agregar
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  }
                 }
               </div>
               <div class="mt-4 flex justify-end gap-2">
@@ -990,7 +1053,7 @@ export class PolicyDesignerComponent implements OnInit {
         this.policyActionsService.openCreateModal.set(false);
         this.openCreatePolicy();
       }
-    });
+    }, { allowSignalWrites: true });
 
     // Sync diagram state to AiChatService
     effect(() => {
@@ -1014,7 +1077,7 @@ export class PolicyDesignerComponent implements OnInit {
         this.aiChatService.activePolicyId = null;
         this.aiChatService.currentDiagramJson.set(null);
       }
-    });
+    }, { allowSignalWrites: true });
   }
 
   readonly Plus = Plus;
@@ -1097,7 +1160,37 @@ export class PolicyDesignerComponent implements OnInit {
   newLaneName = '';
   editingNodeUuid = '';
 
-  nodeForm = { name: '', description: '', state: 'ACTIVITY', fieldsText: '' };
+  nodeForm = { name: '', description: '', state: 'ACTIVITY', fieldsText: '', allowFileUpload: false, requiredDocuments: [] as RequiredDocument[] };
+
+  newDocName = '';
+  newDocDesc = '';
+  newDocRequired = false;
+
+  addRequiredDoc(): void {
+    if (!this.newDocName.trim()) {
+      this.toast.error('El nombre del documento es requerido');
+      return;
+    }
+    if (this.nodeForm.requiredDocuments.some(doc => doc.name.toLowerCase() === this.newDocName.trim().toLowerCase())) {
+      this.toast.error('Ya existe un documento con ese nombre en esta actividad');
+      return;
+    }
+    const doc: RequiredDocument = {
+      name: this.newDocName.trim(),
+      description: this.newDocDesc.trim(),
+      required: this.newDocRequired
+    };
+    // Reassign array reference to trigger Angular change detection
+    this.nodeForm.requiredDocuments = [...this.nodeForm.requiredDocuments, doc];
+    this.newDocName = '';
+    this.newDocDesc = '';
+    this.newDocRequired = false;
+  }
+
+  removeRequiredDoc(index: number): void {
+    // Reassign array reference to trigger Angular change detection
+    this.nodeForm.requiredDocuments = this.nodeForm.requiredDocuments.filter((_, i) => i !== index);
+  }
 
   canvasWidth = computed(() => {
     const lanes = this.canvasLanes();
@@ -1312,7 +1405,7 @@ export class PolicyDesignerComponent implements OnInit {
       this.canvasLanes.set(lanes);
       
       const laneNodeCounts: Record<number, number> = {};
-      const nodes: CanvasNode[] = full.activityNodes.map((n, i) => {
+      const nodes: CanvasNode[] = full.activityNodes.map((n: any, i) => {
       if (n.x !== undefined && n.y !== undefined) {
         return { 
           uuid: n.uuid,
@@ -1322,7 +1415,9 @@ export class PolicyDesignerComponent implements OnInit {
           formSchemaJson: n.formSchemaJson,
           x: n.x, 
           y: n.y, 
-          laneId: n.laneId || '' 
+          laneId: n.laneId || '',
+          allowFileUpload: n.allowFileUpload || false,
+          requiredDocuments: n.requiredDocuments || []
         };
       }
         const laneIdx = i % Math.max(lanes.length, 1);
@@ -1337,7 +1432,9 @@ export class PolicyDesignerComponent implements OnInit {
           formSchemaJson: n.formSchemaJson,
           x: lane ? lane.x + 30 : 50 + i * 200,
           y: 50 + count * 120,
-          laneId: lane?.id || ''
+          laneId: lane?.id || '',
+          allowFileUpload: n.allowFileUpload || false,
+          requiredDocuments: n.requiredDocuments || []
         };
         return canvasNode;
       });
@@ -1546,7 +1643,7 @@ export class PolicyDesignerComponent implements OnInit {
 
   addNode(): void {
     this.editingNodeUuid = '';
-    this.nodeForm = { name: '', description: '', state: 'ACTIVITY', fieldsText: '' };
+    this.nodeForm = { name: '', description: '', state: 'ACTIVITY', fieldsText: '', allowFileUpload: false, requiredDocuments: [] };
     this.showNodeModal.set(true);
   }
 
@@ -1557,6 +1654,8 @@ export class PolicyDesignerComponent implements OnInit {
       description: node.description,
       state: node.state,
       fieldsText: node.formSchemaJson?.fields?.map((f) => f.name + ':' + f.type).join('\n') || '',
+      allowFileUpload: node.allowFileUpload || false,
+      requiredDocuments: node.requiredDocuments ? [...node.requiredDocuments] : []
     };
     this.showNodeModal.set(true);
   }
@@ -1569,7 +1668,15 @@ export class PolicyDesignerComponent implements OnInit {
     if (this.editingNodeUuid) {
       this.canvasNodes.update((nodes) => nodes.map((n) =>
         n.uuid === this.editingNodeUuid
-          ? { ...n, name: this.nodeForm.name, description: this.nodeForm.description, state: this.nodeForm.state, formSchemaJson: { fields } }
+          ? { 
+              ...n, 
+              name: this.nodeForm.name, 
+              description: this.nodeForm.description, 
+              state: this.nodeForm.state, 
+              formSchemaJson: { fields }, 
+              allowFileUpload: this.nodeForm.allowFileUpload,
+              requiredDocuments: this.nodeForm.allowFileUpload ? this.nodeForm.requiredDocuments : []
+            }
           : n
       ));
       const updatedNode = this.canvasNodes().find(n => n.uuid === this.editingNodeUuid);
@@ -1588,6 +1695,8 @@ export class PolicyDesignerComponent implements OnInit {
         x: baseX,
         y: 50 + this.canvasNodes().length * 100,
         laneId: lanes.length > 0 ? lanes[0].id : '',
+        allowFileUpload: this.nodeForm.allowFileUpload || false,
+        requiredDocuments: this.nodeForm.allowFileUpload ? (this.nodeForm.requiredDocuments || []) : []
       };
       this.canvasNodes.update((nodes) => [...nodes, newNode]);
       this.publishEvent('NODE_ADDED', { node: newNode });
@@ -1816,13 +1925,31 @@ export class PolicyDesignerComponent implements OnInit {
     if (!policy) return;
     const activityNodes = this.canvasNodes().map((n) => ({
       uuid: n.uuid, name: n.name, description: n.description, state: n.state, formSchemaJson: n.formSchemaJson,
-      x: n.x || 0, y: n.y || 0, laneId: n.laneId || ''
+      x: n.x || 0, y: n.y || 0, laneId: n.laneId || '', allowFileUpload: n.allowFileUpload || false,
+      requiredDocuments: n.requiredDocuments || []
     }));
     
     const lanes = this.canvasLanes().map(l => ({ ...l }));
     
     this.policyService.updateDiagram(policy.uuid, { activityNodes, transitions: this.diagramTransitions(), lanes }).subscribe({
-      next: (updated) => { this.selectedPolicy.set(updated); this.toast.success('Diagrama guardado exitosamente'); },
+      next: (updated) => { 
+        this.selectedPolicy.set(updated); 
+        if (updated.activityNodes) {
+          this.canvasNodes.set(updated.activityNodes.map((n: any) => ({
+            uuid: n.uuid,
+            name: n.name,
+            description: n.description,
+            state: n.state,
+            formSchemaJson: n.formSchemaJson,
+            x: n.x,
+            y: n.y,
+            laneId: n.laneId || '',
+            allowFileUpload: n.allowFileUpload || false,
+            requiredDocuments: n.requiredDocuments || []
+          })));
+        }
+        this.toast.success('Diagrama guardado exitosamente'); 
+      },
       error: () => { this.toast.error('Error al guardar el diagrama'); },
     });
   }

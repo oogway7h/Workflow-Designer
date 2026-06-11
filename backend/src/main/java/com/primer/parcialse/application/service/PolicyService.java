@@ -179,7 +179,7 @@ public class PolicyService {
         return PolicyResponseDTO.fromEntity(policy);
     }
 
-    public PolicyResponseDTO autoAssignPolicy(String policyUuid) {
+    public AutoAssignPolicyResponseDTO getAutoAssignRecommendations(String policyUuid) {
         Policy policy = policyRepository.findByUuid(policyUuid)
                 .orElseThrow(() -> new ResourceNotFoundException("Política no encontrada: " + policyUuid));
 
@@ -193,13 +193,13 @@ public class PolicyService {
         List<EmployeeInfoDTO> employeeDTOs = new ArrayList<>();
         for (User emp : employees) {
             int pendingTasks = policyInstanceRepository.findPendingTasks(emp.getUuid(), "EMPLOYEE").size();
-            List<?> history = policyInstanceRepository.findInstancesWithHistoryByAssigneeId(emp.getUuid());
             employeeDTOs.add(EmployeeInfoDTO.builder()
                     .uuid(emp.getUuid())
                     .name(emp.getName() + " " + emp.getLastname())
                     .roleName("Funcionario")
                     .currentPendingTasks(pendingTasks)
                     .avgCompletionHours(0.0)
+                    .departmentId(emp.getDepartmentId())
                     .build());
         }
 
@@ -208,6 +208,82 @@ public class PolicyService {
         List<Lane> lanes = policy.getLanes() != null ? policy.getLanes() : new ArrayList<>();
         if (policy.getActivityNodes() != null) {
             for (ActivityNode node : policy.getActivityNodes()) {
+                if (!"ACTIVITY".equals(node.getState()) && !"APPROVAL".equals(node.getState())) {
+                    continue; // Skip INITIAL, FINAL, DECISION, FORK, etc.
+                }
+                String laneName = lanes.stream()
+                        .filter(l -> l.getId() != null && l.getId().equals(node.getLaneId()))
+                        .map(Lane::getName)
+                        .findFirst()
+                        .orElse(null);
+                activityDTOs.add(ActivityInfoDTO.builder()
+                        .uuid(node.getUuid())
+                        .name(node.getName())
+                        .description(node.getDescription())
+                        .laneId(node.getLaneId())
+                        .laneName(laneName)
+                        .build());
+            }
+        }
+
+        AutoAssignPolicyRequestDTO req = AutoAssignPolicyRequestDTO.builder()
+                .policyName(policy.getName())
+                .activities(activityDTOs)
+                .employees(employeeDTOs)
+                .build();
+
+        return aiIntegrationService.autoAssignPolicy(req);
+    }
+
+    public PolicyResponseDTO autoAssignPolicy(String policyUuid) {
+        return autoAssignPolicy(policyUuid, null);
+    }
+
+    public PolicyResponseDTO autoAssignPolicy(String policyUuid, List<AutoAssignPolicyResponseDTO.ActivityAssignmentDTO> assignments) {
+        Policy policy = policyRepository.findByUuid(policyUuid)
+                .orElseThrow(() -> new ResourceNotFoundException("Política no encontrada: " + policyUuid));
+
+        if (assignments != null && !assignments.isEmpty()) {
+            if (policy.getActivityNodes() != null) {
+                for (var assignment : assignments) {
+                    policy.getActivityNodes().stream()
+                            .filter(n -> assignment.getActivityUuid() != null && assignment.getActivityUuid().equals(n.getUuid()))
+                            .findFirst()
+                            .ifPresent(n -> n.setAssigneeId(assignment.getEmployeeUuid()));
+                }
+            }
+            policyRepository.save(policy);
+            return PolicyResponseDTO.fromEntity(policy);
+        }
+
+        // Get EMPLOYEE role id
+        Role employeeRole = roleRepository.findByRoleName("Funcionario")
+                .orElseThrow(() -> new ResourceNotFoundException("Rol 'Funcionario' no encontrado"));
+
+        List<User> employees = userRepository.findByRoleId(employeeRole.getUuid());
+
+        // Build employee metrics
+        List<EmployeeInfoDTO> employeeDTOs = new ArrayList<>();
+        for (User emp : employees) {
+            int pendingTasks = policyInstanceRepository.findPendingTasks(emp.getUuid(), "EMPLOYEE").size();
+            employeeDTOs.add(EmployeeInfoDTO.builder()
+                    .uuid(emp.getUuid())
+                    .name(emp.getName() + " " + emp.getLastname())
+                    .roleName("Funcionario")
+                    .currentPendingTasks(pendingTasks)
+                    .avgCompletionHours(0.0)
+                    .departmentId(emp.getDepartmentId())
+                    .build());
+        }
+
+        // Build activity infos
+        List<ActivityInfoDTO> activityDTOs = new ArrayList<>();
+        List<Lane> lanes = policy.getLanes() != null ? policy.getLanes() : new ArrayList<>();
+        if (policy.getActivityNodes() != null) {
+            for (ActivityNode node : policy.getActivityNodes()) {
+                if (!"ACTIVITY".equals(node.getState()) && !"APPROVAL".equals(node.getState())) {
+                    continue; // Skip INITIAL, FINAL, etc.
+                }
                 String laneName = lanes.stream()
                         .filter(l -> l.getId() != null && l.getId().equals(node.getLaneId()))
                         .map(Lane::getName)

@@ -9,8 +9,10 @@ import { DepartmentService } from '../../../core/services/department.service';
 import { RoleService } from '../../../core/services/role.service';
 import { Policy, ActivityNode, User, Department, Role } from '../../../core/models';
 import { ToastService } from '../../../shared/services/toast.service';
-import { LucideAngularModule, Eye, FileText, Users, ArrowLeft, UserPlus, ListTodo, X, CheckCircle, Bot } from 'lucide-angular';
+import { LucideAngularModule, Eye, FileText, Users, ArrowLeft, UserPlus, ListTodo, X, CheckCircle, Bot, Sparkles } from 'lucide-angular';
 import { LoaderComponent } from '../../../shared/components/loader/loader.component';
+import { AiDlService } from '../../../core/services/ai-dl.service';
+
 
 @Component({
   selector: 'app-assigned-policies',
@@ -98,9 +100,9 @@ import { LoaderComponent } from '../../../shared/components/loader/loader.compon
             <p class="mt-1 text-sm text-muted-foreground">Gestiona y asigna las actividades a los funcionarios correspondientes</p>
           </div>
           <div class="flex items-center gap-2">
-            <button (click)="autoAssign()" [disabled]="isAutoAssigning()" class="inline-flex items-center gap-2 rounded-lg bg-violet-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-violet-700 disabled:opacity-50 transition-colors shadow-sm">
+            <button (click)="autoAssign()" [disabled]="isLoadingRecommendations() || isAutoAssigning()" class="inline-flex items-center gap-2 rounded-lg bg-violet-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-violet-700 disabled:opacity-50 transition-colors shadow-sm">
               <lucide-icon [img]="BotIcon" [size]="16" />
-              {{ isAutoAssigning() ? 'Asignando...' : 'Asignar automáticamente' }}
+              {{ isLoadingRecommendations() ? 'Calculando...' : (isAutoAssigning() ? 'Asignando...' : 'Asignar automáticamente') }}
             </button>
             <button (click)="startPolicyInstance()" class="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2.5 text-sm font-medium text-primary-foreground hover:bg-primary/90 transition-colors shadow-sm">
               <lucide-icon [img]="ListTodo" [size]="16" />
@@ -169,6 +171,36 @@ import { LoaderComponent } from '../../../shared/components/loader/loader.compon
               <p>Selecciona un funcionario del departamento: <strong>{{ getDepartmentName(assigningActivity()?.laneId) }}</strong></p>
             </div>
 
+            <!-- Deep Learning Predictions -->
+            @if (bestRouteLoading()) {
+              <div class="mb-4 text-xs text-muted-foreground flex items-center gap-2 animate-pulse">
+                <lucide-icon [img]="BotIcon" [size]="14" class="text-primary animate-spin" />
+                <span>La Red Neuronal estimando tiempos de finalización...</span>
+              </div>
+            } @else if (bestRouteInfo()) {
+              <div class="mb-4 p-3 rounded-lg border border-primary/20 bg-primary/5 space-y-2 animate-in fade-in duration-200">
+                <div class="flex items-center gap-1.5 text-xs font-semibold text-primary">
+                  <lucide-icon [img]="BotIcon" [size]="14" />
+                  <span>Recomendación Deep Learning</span>
+                </div>
+                <div class="text-xs text-foreground">
+                  Funcionario más rápido estimado: 
+                  <strong class="text-primary">{{ getUserName(bestRouteInfo()?.best_employee_id) }}</strong> 
+                  (Estimado: {{ bestRouteInfo()?.estimated_hours | number:'1.1-1' }} hrs)
+                </div>
+                <div class="text-[10px] text-muted-foreground divide-y divide-border pt-1">
+                  @for (est of bestRouteInfo()?.all_estimates; track est.employee_id) {
+                    <div class="flex justify-between py-1">
+                      <span>{{ getUserName(est.employee_id) }}</span>
+                      <span class="font-medium text-foreground">
+                        {{ est.estimated_hours | number:'1.1-1' }} hrs ({{ getPendingTasksCount(est.employee_id) }} p.)
+                      </span>
+                    </div>
+                  }
+                </div>
+              </div>
+            }
+
             <form (ngSubmit)="confirmAssignment()">
               <label class="mb-1 block text-sm font-medium text-foreground">Funcionario</label>
               <select [(ngModel)]="selectedUserId" name="userId"
@@ -178,7 +210,12 @@ import { LoaderComponent } from '../../../shared/components/loader/loader.compon
                   <option value="" disabled>Sin funcionarios en este departamento</option>
                 }
                 @for (user of departmentUsers(); track user.uuid) {
-                  <option [value]="user.uuid">{{ user.name }} {{ user.lastname }} ({{ user.email }})</option>
+                  <option [value]="user.uuid">
+                    {{ user.name }} {{ user.lastname }} 
+                    @if (bestRouteInfo()) {
+                       &middot; Est: {{ getCandidateEstimateHours(user.uuid) | number:'1.1-1' }} hrs
+                    }
+                  </option>
                 }
               </select>
               <div class="mt-4 flex justify-end gap-2">
@@ -186,6 +223,53 @@ import { LoaderComponent } from '../../../shared/components/loader/loader.compon
                 <button type="submit" [disabled]="!selectedUserId" class="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed">Guardar Asignación</button>
               </div>
             </form>
+          </div>
+        </div>
+      }
+
+      <!-- Recommendations Modal -->
+      @if (showRecommendationsModal()) {
+        <div class="fixed inset-0 z-[60] flex items-center justify-center bg-background/80 backdrop-blur-sm">
+          <div class="w-full max-w-2xl rounded-2xl border border-border bg-card p-6 shadow-xl animate-in zoom-in-95">
+            <div class="mb-4 flex items-center justify-between border-b border-border pb-4">
+              <div>
+                <h3 class="text-lg font-semibold flex items-center gap-2">
+                  <lucide-icon [img]="SparklesIcon" class="text-violet-600" [size]="20" />
+                  Recomendaciones de IA
+                </h3>
+                <p class="text-sm text-muted-foreground">Funcionarios óptimos calculados por Deep Learning</p>
+              </div>
+              <button (click)="showRecommendationsModal.set(false)" class="rounded-lg p-2 hover:bg-accent">
+                <lucide-icon [img]="XIcon" [size]="20" />
+              </button>
+            </div>
+
+            <div class="max-h-[60vh] overflow-y-auto pr-2 space-y-4">
+              @for (assignment of aiRecommendations(); track assignment.activityUuid) {
+                <div class="flex items-center justify-between p-4 rounded-xl border border-border bg-background">
+                  <div>
+                    <p class="font-medium text-sm text-foreground">{{ getActivityName(assignment.activityUuid) }}</p>
+                    <p class="text-xs text-muted-foreground mt-1">Tiempo estimado: {{ assignment.estimatedHours | number:'1.1-1' }}h</p>
+                  </div>
+                  <div class="flex items-center gap-2 bg-violet-50 dark:bg-violet-950/30 text-violet-700 dark:text-violet-400 px-3 py-1.5 rounded-lg">
+                    <lucide-icon [img]="UserIcon" [size]="14" />
+                    <span class="text-sm font-semibold">{{ getUserName(assignment.employeeUuid) }}</span>
+                  </div>
+                </div>
+              }
+              @if (aiRecommendations().length === 0) {
+                <p class="text-center text-sm text-muted-foreground py-6">No hay recomendaciones disponibles para esta política.</p>
+              }
+            </div>
+
+            <div class="mt-6 flex justify-end gap-3 border-t border-border pt-4">
+              <button (click)="showRecommendationsModal.set(false)" class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent">
+                Cancelar
+              </button>
+              <button (click)="confirmAutoAssign()" [disabled]="aiRecommendations().length === 0 || isAutoAssigning()" class="rounded-lg bg-violet-600 px-4 py-2 text-sm font-medium text-white hover:bg-violet-700 disabled:opacity-50">
+                {{ isAutoAssigning() ? 'Aplicando...' : 'Confirmar Asignación' }}
+              </button>
+            </div>
           </div>
         </div>
       }
@@ -211,17 +295,24 @@ export class AssignedPoliciesComponent implements OnInit {
   private readonly departmentService = inject(DepartmentService);
   private readonly roleService = inject(RoleService);
   private readonly toast = inject(ToastService);
+  private readonly aiDlService = inject(AiDlService);
 
-  readonly FileText = FileText;
   readonly Eye = Eye;
+  readonly FileText = FileText;
+  readonly Users = Users;
   readonly ArrowLeft = ArrowLeft;
-  readonly ListTodo = ListTodo;
   readonly UserPlus = UserPlus;
+  readonly ListTodo = ListTodo;
   readonly XIcon = X;
   readonly CheckCircle = CheckCircle;
   readonly BotIcon = Bot;
+  readonly SparklesIcon = Sparkles;
+  readonly UserIcon = Users;
 
   isAutoAssigning = signal<boolean>(false);
+  bestRouteLoading = signal<boolean>(false);
+  bestRouteInfo = signal<any>(null);
+  allInstances = signal<any[]>([]);
 
   assignedPolicies = signal<any[]>([]);
   selectedPolicy = signal<Policy | null>(null);
@@ -233,10 +324,16 @@ export class AssignedPoliciesComponent implements OnInit {
   users = signal<User[]>([]);
   departments = signal<Department[]>([]);
   roles = signal<Role[]>([]);
+  
+  showInstanceStartedModal = signal(false);
+  
+  // Recommendations state
+  isLoadingRecommendations = signal(false);
+  showRecommendationsModal = signal(false);
+  aiRecommendations = signal<any[]>([]);
 
   assigningActivity = signal<ActivityNode | null>(null);
-  selectedUserId = '';
-  showInstanceStartedModal = signal(false);
+  selectedUserId: string = '';
 
   filteredActivities = computed(() => {
     const policy = this.selectedPolicy();
@@ -261,6 +358,10 @@ export class AssignedPoliciesComponent implements OnInit {
     this.userService.getAll().subscribe(u => this.users.set(u));
     this.departmentService.getAll().subscribe(d => this.departments.set(d));
     this.roleService.getAll().subscribe(r => this.roles.set(r));
+    this.policyService.getAllInstances().subscribe({
+      next: (instances) => this.allInstances.set(instances),
+      error: () => {}
+    });
   }
 
   loadAssignedPolicies(): void {
@@ -303,22 +404,99 @@ export class AssignedPoliciesComponent implements OnInit {
     return user ? `${user.name} ${user.lastname}` : 'Sin asignar';
   }
 
+  getPendingTasksCount(userId: string): number {
+    return this.allInstances().filter(
+      inst => inst.currentAssigneeId === userId && inst.status !== 'COMPLETED'
+    ).length;
+  }
+
+  getCandidateEstimateHours(userId: string): number {
+    const info = this.bestRouteInfo();
+    if (!info || !info.all_estimates) return 0;
+    const est = info.all_estimates.find((e: any) => e.employee_id === userId);
+    return est ? est.estimated_hours : 0;
+  }
+
   openAssignModal(activity: ActivityNode): void {
     this.assigningActivity.set(activity);
     this.selectedUserId = '';
+    this.bestRouteInfo.set(null);
+
+    const candidates = this.departmentUsers().map(u => ({
+      employee_id: u.uuid,
+      pending_tasks: this.getPendingTasksCount(u.uuid)
+    }));
+
+    if (candidates.length > 0 && this.selectedPolicy()) {
+      this.bestRouteLoading.set(true);
+      this.aiDlService.findBestRoute(
+        this.selectedPolicy()!.uuid,
+        activity.uuid,
+        candidates
+      ).subscribe({
+        next: (res) => {
+          this.bestRouteLoading.set(false);
+          this.bestRouteInfo.set(res);
+        },
+        error: (err) => {
+          console.error('Error finding best route', err);
+          this.bestRouteLoading.set(false);
+        }
+      });
+    }
   }
 
   autoAssign(): void {
     const policy = this.selectedPolicy();
     if (!policy) return;
+
+    // Primer paso: Consultar las recomendaciones sin aplicar
+    this.isLoadingRecommendations.set(true);
+    this.policyService.getAutoAssignRecommendations(policy.uuid).subscribe({
+      next: (response) => {
+        this.isLoadingRecommendations.set(false);
+        const mapped = (response.assignments || []).map((a: any) => ({
+          activityUuid: a.activity_uuid || a.activityUuid,
+          employeeUuid: a.employee_uuid || a.employeeUuid,
+          justification: a.justification,
+          estimatedHours: a.estimated_hours || a.estimatedHours || parseFloat(a.justification?.match(/estimado:\s*([\d.]+)/)?.[1] || '0')
+        })).filter((a: any) => {
+          const policyVal = this.selectedPolicy();
+          if (!policyVal || !policyVal.activityNodes) return true;
+          const node = policyVal.activityNodes.find((n: any) => n.uuid === a.activityUuid);
+          return node && (node.state === 'ACTIVITY' || node.state === 'APPROVAL');
+        });
+        this.aiRecommendations.set(mapped);
+        this.showRecommendationsModal.set(true);
+      },
+      error: (err) => {
+        this.isLoadingRecommendations.set(false);
+        this.toast.show('Error al calcular las recomendaciones óptimas: ' + (err?.error?.message || err?.message || 'Servicio no disponible'), 'error');
+      }
+    });
+  }
+
+  confirmAutoAssign(): void {
+    const policy = this.selectedPolicy();
+    if (!policy) return;
+
+    // Segundo paso: Aplicar permanentemente la asignación en DB
     this.isAutoAssigning.set(true);
-    this.policyService.autoAssignPolicy(policy.uuid).subscribe({
+
+    const assignmentsPayload = this.aiRecommendations().map(r => ({
+      activity_uuid: r.activityUuid,
+      employee_uuid: r.employeeUuid,
+      justification: r.justification
+    }));
+
+    this.policyService.autoAssignPolicy(policy.uuid, assignmentsPayload).subscribe({
       next: (updatedPolicy) => {
-        this.selectedPolicy.set(updatedPolicy);
         this.assignedPolicies.update(list =>
           list.map(p => p.uuid === updatedPolicy.uuid ? updatedPolicy : p)
         );
+        this.selectedPolicy.set(updatedPolicy);
         this.isAutoAssigning.set(false);
+        this.showRecommendationsModal.set(false);
         this.toast.show('Asignación automática completada con IA', 'success');
       },
       error: (err) => {
@@ -326,6 +504,13 @@ export class AssignedPoliciesComponent implements OnInit {
         this.toast.show('Error al asignar automáticamente: ' + (err?.error?.message || err?.message || 'Servicio IA no disponible'), 'error');
       }
     });
+  }
+
+  getActivityName(uuid: string): string {
+    const policy = this.selectedPolicy();
+    if (!policy || !policy.activityNodes) return 'Actividad';
+    const node = policy.activityNodes.find((n: any) => n.uuid === uuid);
+    return node?.name || 'Actividad';
   }
 
   startPolicyInstance(): void {
@@ -348,6 +533,7 @@ export class AssignedPoliciesComponent implements OnInit {
   closeAssignModal(): void {
     this.assigningActivity.set(null);
     this.selectedUserId = '';
+    this.bestRouteInfo.set(null);
   }
 
   confirmAssignment(): void {

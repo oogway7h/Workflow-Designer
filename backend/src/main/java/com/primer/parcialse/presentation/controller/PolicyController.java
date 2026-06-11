@@ -3,6 +3,7 @@ package com.primer.parcialse.presentation.controller;
 import com.primer.parcialse.application.dto.policy.PolicyDiagramDTO;
 import com.primer.parcialse.application.dto.policy.PolicyRequestDTO;
 import com.primer.parcialse.application.dto.policy.PolicyResponseDTO;
+import com.primer.parcialse.application.dto.ai.AutoAssignPolicyResponseDTO;
 import com.primer.parcialse.application.service.PolicyService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -106,9 +107,16 @@ public class PolicyController {
     @PostMapping("/{policyUuid}/auto-assign")
     @Operation(summary = "Asignación automática con IA", description = "Usa IA para asignar automáticamente empleados a las actividades de la política")
     @SecurityRequirement(name = "Bearer Authentication")
-    @PreAuthorize("hasAnyRole('MANAGER', 'ADMIN')")
-    public ResponseEntity<PolicyResponseDTO> autoAssignPolicy(@PathVariable String policyUuid) {
-        return ResponseEntity.ok(policyService.autoAssignPolicy(policyUuid));
+    @PreAuthorize("hasAnyRole('MANAGER', 'ADMIN', 'DESIGNER')")
+    public ResponseEntity<PolicyResponseDTO> autoAssignPolicy(
+            @PathVariable String policyUuid,
+            @RequestBody(required = false) List<AutoAssignPolicyResponseDTO.ActivityAssignmentDTO> assignments) {
+        return ResponseEntity.ok(policyService.autoAssignPolicy(policyUuid, assignments));
+    }
+
+    @GetMapping("/{policyUuid}/recommend-assignees")
+    public ResponseEntity<AutoAssignPolicyResponseDTO> recommendAssignees(@PathVariable String policyUuid) {
+        return ResponseEntity.ok(policyService.getAutoAssignRecommendations(policyUuid));
     }
 
     @PutMapping("/{policyId}/share")

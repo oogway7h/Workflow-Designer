@@ -8,6 +8,7 @@ import com.primer.parcialse.application.dto.policy.EmployeeDashboardDTO;
 import com.primer.parcialse.domain.exception.ResourceNotFoundException;
 import com.primer.parcialse.domain.model.ActivityNode;
 import com.primer.parcialse.domain.model.HistoryItem;
+import com.primer.parcialse.domain.model.RequiredDocument;
 import com.primer.parcialse.domain.model.Policy;
 import com.primer.parcialse.domain.model.PolicyInstance;
 import com.primer.parcialse.domain.model.Role;
@@ -132,12 +133,27 @@ public class WorkflowService {
         instance.setUpdatedAt(Instant.now());
         PolicyInstance saved = policyInstanceRepository.save(instance);
 
-        // Trigger: tarea completada → workflow terminado → notificar al applicant
-        if ("COMPLETED".equals(saved.getStatus()) && saved.getApplicantId() != null) {
+        // Trigger: tarea completada → notificar al applicant del avance o conclusión del trámite
+        if (saved.getApplicantId() != null) {
+            String notificationTitle = "Avance en tu trámite";
+            String notificationMessage;
+            if ("COMPLETED".equals(saved.getStatus())) {
+                notificationTitle = "Trámite completado";
+                notificationMessage = "Tu trámite ha sido completado exitosamente.";
+            } else {
+                String completedTaskName = "";
+                if (policy.getActivityNodes() != null) {
+                    completedTaskName = policy.getActivityNodes().stream()
+                            .filter(n -> currentActivityId.equals(n.getUuid()))
+                            .map(n -> n.getName() != null && !n.getName().isBlank() ? n.getName() : n.getDescription())
+                            .findFirst().orElse("");
+                }
+                notificationMessage = "Se completó la tarea: " + completedTaskName + ". Tu trámite ha avanzado.";
+            }
             notificationService.createNotification(
                     saved.getApplicantId(),
-                    "Trámite completado",
-                    "Tu trámite ha sido completado exitosamente.",
+                    notificationTitle,
+                    notificationMessage,
                     "STATUS_CHANGED",
                     saved.getUuid());
         }
@@ -405,6 +421,8 @@ public class WorkflowService {
         String taskName = "Unknown";
         String assigneeName = null;
         Map<String, Object> formSchemaJson = null;
+        Boolean allowFileUpload = false;
+        List<RequiredDocument> requiredDocuments = null;
 
         if (policy != null && inst.getCurrentActivityNodeId() != null && policy.getActivityNodes() != null) {
             ActivityNode currentNode = policy.getActivityNodes().stream()
@@ -414,6 +432,8 @@ public class WorkflowService {
             if (currentNode != null) {
                 taskName = currentNode.getName() != null ? currentNode.getName() : currentNode.getDescription();
                 formSchemaJson = currentNode.getFormSchemaJson();
+                allowFileUpload = currentNode.getAllowFileUpload();
+                requiredDocuments = currentNode.getRequiredDocuments();
                 if (currentNode.getAssigneeId() != null) {
                     User assignee = userRepository.findByUuid(currentNode.getAssigneeId()).orElse(null);
                     if (assignee != null) {
@@ -425,7 +445,9 @@ public class WorkflowService {
 
         return InstanceDetailDTO.builder()
                 .instanceId(inst.getUuid())
+                .policyId(inst.getPolicyId())
                 .policyName(policy != null ? policy.getDescription() : "Desconocida")
+                .applicantId(inst.getApplicantId())
                 .status(inst.getStatus())
                 .currentTaskId(inst.getCurrentActivityNodeId())
                 .currentTaskName(taskName)
@@ -434,6 +456,8 @@ public class WorkflowService {
                 .instanceData(inst.getInstanceData())
                 .startedAt(inst.getCreatedAt())
                 .updatedAt(inst.getUpdatedAt())
+                .allowFileUpload(allowFileUpload != null ? allowFileUpload : false)
+                .requiredDocuments(requiredDocuments != null ? requiredDocuments : List.of())
                 .build();
     }
 

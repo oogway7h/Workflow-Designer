@@ -11,7 +11,8 @@ import {
   History,
   Bot,
   Bell,
-  FolderOpen
+  FolderOpen,
+  Sparkles
 } from 'lucide-angular';
 
 export type UserRole = 'ADMIN' | 'DESIGNER' | 'MANAGER' | 'EMPLOYEE' | 'CUSTOMER';
@@ -114,6 +115,13 @@ export const MENU_CONFIG: MenuItem[] = [
     label: 'Documentos',
     icon: FolderOpen,
     roles: ['ADMIN', 'DESIGNER', 'MANAGER', 'EMPLOYEE', 'CUSTOMER'],
+  },
+  // Reportes e IA (Todos menos CUSTOMER)
+  {
+    path: '/app/reports',
+    label: 'Reportes e IA',
+    icon: Sparkles,
+    roles: ['ADMIN', 'DESIGNER', 'MANAGER', 'EMPLOYEE'],
   },
 ];
 

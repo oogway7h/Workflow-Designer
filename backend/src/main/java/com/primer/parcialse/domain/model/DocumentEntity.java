@@ -22,6 +22,7 @@ public class DocumentEntity {
     private String uuid;
     private String fileName;
     private String contentType;
+    private String requirementName;
     
     // Repositorios
     private String policyId;

@@ -1,4 +1,4 @@
-import { Component, EventEmitter, Output, inject } from '@angular/core';
+import { Component, EventEmitter, Output, Input, inject } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { LucideAngularModule, UploadCloud, X, File, FileText, FileSpreadsheet, FileImage } from 'lucide-angular';
@@ -21,15 +21,11 @@ import { Policy } from '../../../core/models';
         </div>
 
         <div class="p-6">
-          <div class="mb-4">
-            <label class="block text-sm font-medium text-foreground mb-1">Repositorio (Opcional)</label>
-            <select
-              [(ngModel)]="selectedPolicyId"
-              class="w-full bg-background text-foreground rounded-lg border border-input px-3 py-2 text-sm focus:border-primary focus:ring-1 focus:ring-primary"
-            >
-              <option [ngValue]="undefined">Repositorio Global</option>
-              <option *ngFor="let policy of policies" [value]="policy.uuid">{{ policy.name }}</option>
-            </select>
+          <div class="mb-4 text-sm text-muted-foreground flex justify-between items-center bg-muted/30 px-4 py-2 rounded-lg">
+            <span>Repositorio de Destino:</span>
+            <span class="font-medium text-foreground bg-primary/10 text-primary px-2 py-1 rounded">
+              {{ policyId ? 'Política' : (customerId ? 'Cliente' : 'Global') }}
+            </span>
           </div>
 
           <div
@@ -89,6 +85,8 @@ import { Policy } from '../../../core/models';
   `
 })
 export class DocumentUploadComponent {
+  @Input() policyId?: string;
+  @Input() customerId?: string;
   @Output() close = new EventEmitter<void>();
   @Output() uploadSuccess = new EventEmitter<void>();
 
@@ -101,15 +99,8 @@ export class DocumentUploadComponent {
   isDragging = false;
   isUploading = false;
   selectedFile: File | null = null;
-  
-  policies: Policy[] = [];
-  selectedPolicyId?: string;
 
   ngOnInit() {
-    this.policyService.getAll().subscribe({
-      next: (policies) => this.policies = policies,
-      error: (err) => console.error('Error fetching policies', err)
-    });
   }
 
   onDragOver(event: DragEvent) {
@@ -142,7 +133,7 @@ export class DocumentUploadComponent {
     if (!this.selectedFile) return;
 
     this.isUploading = true;
-    this.documentService.upload(this.selectedFile, this.selectedPolicyId).subscribe({
+    this.documentService.upload(this.selectedFile, this.policyId, this.customerId).subscribe({
       next: () => {
         this.isUploading = false;
         this.uploadSuccess.emit();

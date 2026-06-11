@@ -26,7 +26,7 @@ export interface NlpIntentRequest {
 }
 
 export interface NlpIntentResponse {
-  intent: 'navigate' | 'ask' | 'generate_policy' | 'fill_form' | 'open_create_policy' | 'modify_diagram';
+  intent: 'navigate' | 'ask' | 'generate_policy' | 'fill_form' | 'open_create_policy' | 'modify_diagram' | 'compile_report';
   spoken_text: string;
 }
 

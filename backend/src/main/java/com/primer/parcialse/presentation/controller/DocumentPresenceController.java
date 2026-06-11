@@ -43,4 +43,32 @@ public class DocumentPresenceController {
     public String relayAwareness(@DestinationVariable String docId, String awareness) {
         return awareness;
     }
+
+    // Relay spreadsheet cell selection changes
+    @MessageMapping("/spreadsheet/{docId}/selection")
+    @SendTo("/topic/spreadsheet/{docId}/selection")
+    public String relaySpreadsheetSelection(@DestinationVariable String docId, String selection) {
+        return selection;
+    }
+
+    // Relay spreadsheet cell value changes
+    @MessageMapping("/spreadsheet/{docId}/cell-change")
+    @SendTo("/topic/spreadsheet/{docId}/cell-change")
+    public String relaySpreadsheetCellChange(@DestinationVariable String docId, String cellChange) {
+        return cellChange;
+    }
+
+    // Relay spreadsheet structural changes (add/delete row/col)
+    @MessageMapping("/spreadsheet/{docId}/structure")
+    @SendTo("/topic/spreadsheet/{docId}/structure")
+    public String relaySpreadsheetStructure(@DestinationVariable String docId, String structureChange) {
+        return structureChange;
+    }
+
+    // Relay spreadsheet state sync messages (REQUEST_STATE / FULL_STATE)
+    @MessageMapping("/spreadsheet/{docId}/sync")
+    @SendTo("/topic/spreadsheet/{docId}/sync")
+    public String relaySpreadsheetSync(@DestinationVariable String docId, String syncMessage) {
+        return syncMessage;
+    }
 }

@@ -58,8 +58,12 @@ export class PolicyService {
     return this.http.put<Policy>(`${this.apiUrl}/${uuid}/share`, { collaboratorIds });
   }
 
-  autoAssignPolicy(policyUuid: string): Observable<Policy> {
-    return this.http.post<Policy>(`${this.apiUrl}/${policyUuid}/auto-assign`, {});
+  autoAssignPolicy(policyUuid: string, assignments?: any[]): Observable<Policy> {
+    return this.http.post<Policy>(`${this.apiUrl}/${policyUuid}/auto-assign`, assignments || {});
+  }
+
+  getAutoAssignRecommendations(policyUuid: string): Observable<any> {
+    return this.http.get<any>(`${this.apiUrl}/${policyUuid}/recommend-assignees`);
   }
 
   delete(uuid: string): Observable<void> {

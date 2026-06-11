@@ -11,11 +11,17 @@ export class DocumentService {
   private readonly http = inject(HttpClient);
   private readonly apiUrl = `${environment.apiUrl}/documents`;
 
-  upload(file: File, policyId?: string): Observable<DocumentUploadResponse> {
+  upload(file: File, policyId?: string, customerId?: string, requirementName?: string): Observable<DocumentUploadResponse> {
     const formData = new FormData();
     formData.append('file', file);
     if (policyId) {
       formData.append('policyId', policyId);
+    }
+    if (customerId) {
+      formData.append('customerId', customerId);
+    }
+    if (requirementName) {
+      formData.append('requirementName', requirementName);
     }
     return this.http.post<DocumentUploadResponse>(`${this.apiUrl}/upload`, formData);
   }
@@ -26,6 +32,10 @@ export class DocumentService {
 
   getByPolicy(policyId: string): Observable<Document[]> {
     return this.http.get<Document[]>(`${this.apiUrl}/policy/${policyId}`);
+  }
+
+  getByCustomer(customerId: string): Observable<Document[]> {
+    return this.http.get<Document[]>(`${this.apiUrl}/customer/${customerId}`);
   }
 
   download(uuid: string): Observable<Blob> {

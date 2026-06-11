@@ -20,6 +20,7 @@ public class DocumentResponseDTO {
     private String uploaderName;
     private String policyId;
     private String customerId;
+    private String requirementName;
     private Instant createdAt;
     private String downloadUrl;
     private Integer currentVersion;

@@ -5,6 +5,7 @@ import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
@@ -44,6 +45,12 @@ public class ActivityNode {
      */
     private Map<String, Object> formSchemaJson;
 
+    /** Indica si esta actividad permite subir archivos y documentos */
+    private Boolean allowFileUpload;
+
+    /** Lista de documentos requeridos para esta actividad */
+    private List<RequiredDocument> requiredDocuments;
+
     public static ActivityNode create(String name, String description, String state, Map<String, Object> formSchema) {
         return ActivityNode.builder()
                 .uuid(UUID.randomUUID().toString())
@@ -51,6 +58,8 @@ public class ActivityNode {
                 .description(description)
                 .state(state)
                 .formSchemaJson(formSchema)
+                .allowFileUpload(false)
+                .requiredDocuments(new java.util.ArrayList<>())
                 .build();
     }
 }

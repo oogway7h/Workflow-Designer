@@ -7,6 +7,7 @@ configure_groq()
 
 from api.routes import router as ai_router
 from api.nlp_router import nlp_router
+from api.dl_router import dl_router
 import uvicorn
 from contextlib import asynccontextmanager
 
@@ -34,6 +35,7 @@ app.add_middleware(
 
 app.include_router(ai_router, prefix="/api/v1/ai")
 app.include_router(nlp_router, prefix="/api/v1/ai")
+app.include_router(dl_router, prefix="/api/v1/ai")
 
 if __name__ == "__main__":
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)

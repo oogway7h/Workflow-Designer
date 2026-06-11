@@ -27,14 +27,15 @@ public class DocumentService {
     private final S3StorageService s3StorageService;
     private final DocumentAuditService documentAuditService;
     private final SimpMessagingTemplate messagingTemplate;
+    private final com.primer.parcialse.infrastructure.repository.UserRepository userRepository;
 
-    public DocumentResponseDTO upload(MultipartFile file, String policyId, String customerId, String userId, String userName) throws IOException {
+    public DocumentResponseDTO upload(MultipartFile file, String policyId, String customerId, String requirementName, String userId, String userName) throws IOException {
         String fileName = file.getOriginalFilename();
         if (fileName == null || fileName.isEmpty()) {
             throw new IllegalArgumentException("File name cannot be empty");
         }
 
-        String folder = policyId != null ? "policies/" + policyId : (customerId != null ? "customers/" + customerId : "general");
+        String folder = customerId != null ? "customers/" + customerId : (policyId != null ? "policies/" + policyId : "general");
         String s3Key = s3StorageService.upload(file, folder);
 
         // Check if document already exists to create a new version
@@ -47,6 +48,7 @@ public class DocumentService {
         DocumentEntity document;
         if (existingDocOpt.isPresent()) {
             document = existingDocOpt.get();
+            document.setRequirementName(requirementName);
             int newVersionNumber = document.getCurrentVersion() + 1;
             
             DocumentVersion newVersion = new DocumentVersion();
@@ -64,6 +66,7 @@ public class DocumentService {
             document.setUuid(UUID.randomUUID().toString());
             document.setFileName(fileName);
             document.setContentType(file.getContentType());
+            document.setRequirementName(requirementName);
             document.setPolicyId(policyId);
             document.setCustomerId(customerId);
             document.setUploadedByUserId(userId);
@@ -144,20 +147,30 @@ public class DocumentService {
 
     public List<DocumentResponseDTO> getByPolicy(String policyId) {
         return documentRepository.findByPolicyId(policyId).stream()
-                .map(d -> toDto(d, "Unknown")) // Note: Should ideally map usernames properly
+                .map(this::toDtoWithUserName)
                 .collect(Collectors.toList());
     }
 
     public List<DocumentResponseDTO> getByCustomer(String customerId) {
         return documentRepository.findByCustomerId(customerId).stream()
-                .map(d -> toDto(d, "Unknown"))
+                .map(this::toDtoWithUserName)
                 .collect(Collectors.toList());
     }
     
     public List<DocumentResponseDTO> getAll() {
         return documentRepository.findAll().stream()
-                .map(d -> toDto(d, "Unknown"))
+                .map(this::toDtoWithUserName)
                 .collect(Collectors.toList());
+    }
+
+    private DocumentResponseDTO toDtoWithUserName(DocumentEntity document) {
+        String uploaderName = "Unknown";
+        if (document.getUploadedByUserId() != null) {
+            uploaderName = userRepository.findByUuid(document.getUploadedByUserId())
+                    .map(user -> user.getName() + " " + user.getLastname())
+                    .orElse("Unknown");
+        }
+        return toDto(document, uploaderName);
     }
 
     private DocumentResponseDTO toDto(DocumentEntity document, String uploaderName) {
@@ -175,6 +188,7 @@ public class DocumentService {
                 .uploaderName(uploaderName)
                 .policyId(document.getPolicyId())
                 .customerId(document.getCustomerId())
+                .requirementName(document.getRequirementName())
                 .createdAt(document.getCreatedAt())
                 .currentVersion(document.getCurrentVersion())
                 .build();

@@ -4,7 +4,8 @@ from fastapi import HTTPException
 from domain.models import (
     SuggestFieldRequest, GeneratePolicyRequest, ModifyDiagramRequest,
     ChatRequest, RecommendAssigneeRequest, AnalyticsBottlenecksRequest,
-    NlpNavigateRequest, NlpFillFormRequest, NlpIntentRequest
+    NlpNavigateRequest, NlpFillFormRequest, NlpIntentRequest, NlpCompileReportRequest,
+    NlpAnalyzeDataRequest
 )
 import json
 import re
@@ -12,9 +13,8 @@ import re
 class AIService:
     def __init__(self):
         self.client = Groq(api_key=os.environ.get("GROQ_API_KEY"))
-        # Modelos requeridos
-        self.model_fast = 'llama-3.3-70b-versatile'
-        self.model_complex = 'llama-3.1-8b-instant'
+        self.model_fast = 'llama-3.1-8b-instant'
+        self.model_complex = 'llama-3.3-70b-versatile'
 
     def suggest_field(self, request: SuggestFieldRequest) -> str:
         try:
@@ -152,12 +152,91 @@ JSON ACTUAL DEL DIAGRAMA:
 
     def assistant_chat(self, request: ChatRequest) -> str:
         try:
+            if request.current_screen == 'DASHBOARD_ANALYTICS':
+                # Pre-calcular asignaciones óptimas con DL para que el chat coincida exactamente con la auto-asignación
+                optimal_assignments_text = ""
+                try:
+                    screen_data_dict = json.loads(request.screen_data)
+                    recs = screen_data_dict.get('aiRecommendations', [])
+                    if recs:
+                        optimal_list = []
+                        for r in recs:
+                            optimal_list.append(f"Para '{r['activityName']}': recomendar a {r['employeeName']} (Tiempo est.: {round(r['estimatedHours'], 1)}h)")
+                        optimal_assignments_text = "\n\nASIGNACIONES ÓPTIMAS CALCULADAS POR EL MOTOR DE IA (DEBES RECOMENDAR ESTAS EXACTAMENTE Y MOSTRAR ÚNICAMENTE LA MEJOR OPCIÓN POR ACTIVIDAD):\n" + "\n".join(optimal_list)
+                    else:
+                        from api.dl_router import _get_completion_predictor
+                        predictor = _get_completion_predictor()
+                        if predictor.is_trained():
+                            activities = screen_data_dict.get('dlAnalyticsResult', [])
+                            employees = screen_data_dict.get('availableEmployees', [])
+                            
+                            optimal_list = []
+                            simulated_load = {emp["id"]: 0 for emp in employees}
+                            seen_tasks = set()
+                            for act in activities:
+                                task_name = act.get('task_name') or act.get('task_id', '')
+                                if not task_name or task_name in seen_tasks: continue
+                                seen_tasks.add(task_name)
+                                
+                                # Filtrar candidatos: deben pertenecer al mismo departamento (lane_id / department_id)
+                                task_dept = act.get('department_id')
+                                cands = []
+                                for e in employees:
+                                    emp_dept = e.get('departmentId') or e.get('department_id')
+                                    if task_dept and emp_dept and task_dept != emp_dept:
+                                        continue
+                                    cands.append({
+                                        "employee_id": e["id"],
+                                        "pending_tasks": simulated_load.get(e["id"], 0)
+                                    })
+                                
+                                if not cands:
+                                    cands = [{"employee_id": e["id"], "pending_tasks": simulated_load.get(e["id"], 0)} for e in employees]
+                                    
+                                if not cands: continue
+                                    
+                                best_result = predictor.find_best_assignee("default_policy", task_name, cands)
+                                best_id = best_result["best_employee_id"]
+                                best_emp = next((e for e in employees if e["id"] == best_id), None)
+                                if best_emp:
+                                    simulated_load[best_id] += 1
+                                    optimal_list.append(f"Para '{task_name}': recomendar a {best_emp['name']} (Tiempo est.: {round(best_result['estimated_hours'], 1)}h)")
+                            
+                            if optimal_list:
+                                optimal_assignments_text = "\n\nASIGNACIONES ÓPTIMAS CALCULADAS POR DEEP LEARNING (USA ESTAS EXACTAMENTE):\n" + "\n".join(optimal_list)
+                except Exception as e:
+                    pass
+
+                system_prompt = (
+                    f"Eres 'Flowy', un asistente corporativo directo y profesional. Rol: {request.user_role}. "
+                    f"Pantalla: '{request.current_screen}'. Contexto: {request.screen_data}. "
+                    "REGLAS CRÍTICAS Y ESTRICTAS PARA TU RESPUESTA:\n"
+                    "1. NO expliques tu proceso mental (ej. 'Buscaré en el contexto...', 'Al revisar el JSON...').\n"
+                    "2. NO imprimas ni muestres bloques de código JSON ni arrays.\n"
+                    "3. NO menciones los UUIDs.\n"
+                    "4. Usa el nombre real de la política indicado en 'selectedPolicyName'.\n"
+                    f"5. Debes RECOMENDAR EXCLUSIVAMENTE y DE FORMA EXACTA el funcionario indicado por el modelo de IA Predictiva en la sección ASIGNACIONES ÓPTIMAS: {optimal_assignments_text}\n"
+                    "6. IGNORA COMPLETAMENTE la lista de 'availableEmployees' y sus puntuaciones de porcentaje (como 87%, 96%, 99%). NO uses ni muestres esos porcentajes para recomendar.\n"
+                    "7. Muestra ÚNICAMENTE la mejor opción para cada actividad (un solo funcionario por actividad). NUNCA listes múltiples funcionarios para una actividad, ni segundas opciones, ni subviñetas.\n"
+                    "8. Formato obligatorio por cada actividad (usa exactamente este formato):\n"
+                    "   - **[Nombre de la Actividad]**: [Nombre del Funcionario] (Rendimiento/Estimado: [valor de tiempo estimado en horas, ej: 4.5h])\n"
+                    "9. Escribe solo una breve introducción amable en español y luego directamente la lista de asignaciones. Sé extremadamente conciso y directo."
+                )
+            else:
+                system_prompt = (
+                    f"Eres 'Flowy', asistente del Motor de Workflows. Rol del usuario: {request.user_role}. "
+                    f"Pantalla actual: '{request.current_screen}'. Contexto: {request.screen_data}. "
+                    "Si el usuario pregunta por un trámite, desea iniciar un proceso o pide información sobre qué necesita, "
+                    "identifica el trámite adecuado de la lista provista en el contexto, explícale de forma clara el flujo y "
+                    "detalla qué documentos específicos (obligatorios y opcionales) deberá subir. "
+                    "Responde en máximo 4 oraciones de forma directa. Si necesitas listar los documentos, usa viñetas muy breves."
+                )
             response = self.client.chat.completions.create(
                 model=self.model_fast,
                 messages=[
                     {
                         "role": "system",
-                        "content": f"Eres 'Flowy', asistente del Motor de Workflows. Rol del usuario: {request.user_role}. Pantalla actual: '{request.current_screen}'. Contexto: {request.screen_data}. Responde en máximo 3 oraciones, de forma directa y sin rodeos. Si necesitas listar pasos, usa máximo 4 puntos breves."
+                        "content": system_prompt
                     },
                     {
                         "role": "user",
@@ -207,6 +286,8 @@ JSON ACTUAL DEL DIAGRAMA:
             '/manager/history (historial, historial de instancias, procesos completados) [solo MANAGER]',
             '/employee/inbox (tareas, bandeja de entrada, mis tareas pendientes) [solo EMPLOYEE]',
             '/employee/history (mi historial, tareas completadas, historial del empleado) [solo EMPLOYEE]',
+            '/documents (documentos, archivos, gestor documental, dms, subir archivos, ver archivos)',
+            '/reports (reportes, kpis, estadísticas, informes, reportes e ia, graficos)',
         ]
         try:
             response = self.client.chat.completions.create(
@@ -256,7 +337,7 @@ JSON ACTUAL DEL DIAGRAMA:
             raise HTTPException(status_code=503, detail=f"Error al comunicarse con la API de Groq: {str(e)}")
 
     def nlp_intent(self, request: NlpIntentRequest) -> dict:
-        """Classifica la intención del texto hablado: navigate | ask | generate_policy | fill_form | open_create_policy"""
+        """Classifica la intención del texto hablado: navigate | ask | generate_policy | fill_form | open_create_policy | compile_report"""
         try:
             response = self.client.chat.completions.create(
                 model=self.model_fast,
@@ -269,12 +350,16 @@ JSON ACTUAL DEL DIAGRAMA:
                             "Tu única tarea es analizar el texto del usuario y clasificarlo en UNA de las siguientes intenciones. Debes devolver un JSON válido con la clave 'intent'.\n\n"
                             "Intenciones permitidas:\n"
                             "- 'navigate': Ir a otra sección de la aplicación (ej: 'llévame al dashboard').\n"
-                            "- 'open_create_policy': El usuario indica que quiere CREAR una NUEVA política (ej: 'crear nueva política').\n"
-                            "- 'generate_policy': El usuario pide generar un diagrama/flujo desde cero (ej: 'genera un flujo para compras').\n"
+                            "- 'open_create_policy': El usuario indica que quiere CREAR una NUEVA política VACÍA usando el formulario (ej: 'crear nueva política', 'nueva política').\n"
+                            "- 'generate_policy': El usuario describe un trámite, proceso o flujo de trabajo y quiere que la IA lo GENERE AUTOMÁTICAMENTE como diagrama. INCLUYE frases como 'crea un trámite de...', 'genera un flujo para...', 'crea un proceso de...', 'diseña un flujo que...', 'hazme un trámite para...', 'quiero un flujo de...', y también comandos cortos que implican crear/generar algo ya descrito como 'créalo', 'hazlo', 'genéralo', 'sí créalo'. ¡Si el usuario describe PASOS de un proceso, la intención ES generate_policy!\n"
                             "- 'modify_diagram': El usuario da instrucciones para ALTERAR, EDITAR, AGREGAR, o ELIMINAR elementos del diagrama existente. INCLUYE frases como 'agrega una actividad', 'agrega un grid', 'edita las conexiones', 'conecta A con B', 'elimina el nodo'. ¡CUALQUIER comando para cambiar el diagrama pertenece aquí, NO ES UNA PREGUNTA!\n"
                             "- 'fill_form': Llenar un formulario con datos.\n"
-                            "- 'ask': Solo para cuando el usuario hace una pregunta informativa general que NO implica alterar el sistema ni modificar el diagrama (ej: '¿cómo funciona esto?').\n\n"
-                            "REGLA DE ORO: Si el texto dice 'agrega', 'edita', 'conecta', 'modifica', o 'elimina' algo del diagrama, la intención DEBE SER 'modify_diagram' y JAMÁS 'ask'.\n"
+                            "- 'compile_report': El usuario solicita generar, descargar, ver, consultar o crear un reporte o informe estadístico, gráficos de reporte o KPIs en lenguaje natural (ej: 'quiero un reporte...', 'genera un reporte de...', 'saca un informe con...', 'muéstrame un gráfico de...').\n"
+                            "- 'ask': Solo para cuando el usuario hace una pregunta informativa general que NO implica alterar el sistema, modificar el diagrama, NI crear/generar un trámite o flujo (ej: '¿cómo funciona esto?').\n\n"
+                            "REGLAS DE ORO:\n"
+                            "1. Si el texto dice 'agrega', 'edita', 'conecta', 'modifica', o 'elimina' algo del diagrama, la intención DEBE SER 'modify_diagram' y JAMÁS 'ask'.\n"
+                            "2. Si el texto dice 'crea un trámite', 'crea un flujo', 'crea un proceso', 'genera un flujo', 'hazme un proceso', 'diseña un trámite' o describe pasos de un proceso, la intención DEBE SER 'generate_policy' y JAMÁS 'ask'.\n"
+                            "3. 'créalo', 'hazlo', 'genéralo', 'sí, créalo' = 'generate_policy'.\n"
                             "Responde SOLO con JSON: {\"intent\": \"<valor>\"}"
                         )
                     },
@@ -288,13 +373,42 @@ JSON ACTUAL DEL DIAGRAMA:
             result = json.loads(clean_text)
             intent = result.get("intent", "ask")
             
+            text_lower = request.spoken_text.lower().strip()
+
+            # Hardcoded fallback to guarantee generate_policy on creation commands
+            gen_phrases = [
+                "crea un tramite", "crea un trámite", "crea un flujo", "crea un proceso",
+                "genera un tramite", "genera un trámite", "genera un flujo", "genera un proceso",
+                "diseña un flujo", "diseña un tramite", "diseña un trámite", "diseña un proceso",
+                "hazme un flujo", "hazme un tramite", "hazme un trámite", "hazme un proceso",
+                "quiero un flujo", "quiero un tramite", "quiero un trámite", "quiero un proceso",
+                "crea el tramite", "crea el trámite", "crea el flujo", "crea el proceso",
+                "genera el diagrama", "genera el tramite", "genera el trámite",
+            ]
+            # Short confirmation commands that mean "yes, generate it"
+            gen_confirmations = [
+                "crealo", "créalo", "hazlo", "generalo", "genéralo",
+                "si crealo", "sí créalo", "si hazlo", "sí hazlo",
+                "si generalo", "sí genéralo", "dale", "procede",
+            ]
+            
+            if intent in ("ask", "modify_diagram") and any(phrase in text_lower for phrase in gen_phrases):
+                intent = "generate_policy"
+            
+            if intent in ("ask", "modify_diagram") and text_lower in gen_confirmations:
+                intent = "generate_policy"
+
             # Hardcoded fallback to guarantee modify_diagram on explicit commands
-            text_lower = request.spoken_text.lower()
             mod_verbs = ["agrega ", "agregar ", "edita ", "editar ", "modifica ", "modificar ", "conecta ", "conectar ", "elimina ", "eliminar ", "cambia ", "cambiar ", "pon ", "añade ", "quita ", "añadir ", "quitar "]
             if intent == "ask" and any(verb in text_lower for verb in mod_verbs):
                 intent = "modify_diagram"
 
-            if intent not in ("navigate", "generate_policy", "fill_form", "ask", "open_create_policy", "modify_diagram"):
+            # Hardcoded fallback to guarantee compile_report on report requests
+            report_keywords = ["reporte", "informe", "kpi", "gráfico", "grafico", "kpis"]
+            if (intent in ("ask", "navigate")) and any(kw in text_lower for kw in report_keywords):
+                intent = "compile_report"
+
+            if intent not in ("navigate", "generate_policy", "fill_form", "ask", "open_create_policy", "modify_diagram", "compile_report"):
                 intent = "ask"
             return {"intent": intent, "spoken_text": request.spoken_text}
         except json.JSONDecodeError:
@@ -327,6 +441,55 @@ JSON ACTUAL DEL DIAGRAMA:
             raise HTTPException(status_code=503, detail=f"Error al comunicarse con la API de Groq: {str(e)}")
 
     def auto_assign_policy(self, request) -> dict:
+        try:
+            from api.dl_router import _get_completion_predictor
+            predictor = _get_completion_predictor()
+            
+            if predictor.is_trained():
+                assignments = []
+                # Copiar empleados para simular carga
+                employees = {emp.uuid: emp.current_pending_tasks for emp in request.employees}
+                
+                for activity in request.activities:
+                    candidates = []
+                    for emp in request.employees:
+                        # Filtrar candidatos: deben pertenecer al mismo departamento (lane_id) de la actividad
+                        if activity.lane_id and emp.department_id and emp.department_id != activity.lane_id:
+                            continue
+                        candidates.append({
+                            "employee_id": emp.uuid,
+                            "pending_tasks": employees[emp.uuid]
+                        })
+                    
+                    if not candidates:
+                        # Fallback si no hay nadie del departamento
+                        for emp in request.employees:
+                            candidates.append({
+                                "employee_id": emp.uuid,
+                                "pending_tasks": employees[emp.uuid]
+                            })
+                    
+                    # Predice el mejor funcionario para esta actividad
+                    best_result = predictor.find_best_assignee(
+                        policy_id="default_policy", 
+                        activity_id=activity.uuid, 
+                        candidates=candidates
+                    )
+                    best_employee_id = best_result["best_employee_id"]
+                    
+                    # Actualiza la carga para las siguientes iteraciones
+                    employees[best_employee_id] += 1
+                    
+                    assignments.append({
+                        "activity_uuid": activity.uuid,
+                        "employee_uuid": best_employee_id,
+                        "justification": f"Asignado óptimamente por modelo de Deep Learning (estimado: {round(best_result['estimated_hours'], 1)}h)."
+                    })
+                    
+                return {"assignments": assignments}
+        except Exception as e:
+            pass # Fallback to LLM
+
         activities_json = json.dumps([a.model_dump() for a in request.activities], ensure_ascii=False)
         employees_json = json.dumps([e.model_dump() for e in request.employees], ensure_ascii=False)
         try:
@@ -337,13 +500,13 @@ JSON ACTUAL DEL DIAGRAMA:
                     {
                         "role": "system",
                         "content": (
-                            "Eres un optimizador de asignacion de recursos humanos. "
-                            "Recibirás actividades de una política y empleados disponibles con sus métricas. "
+                            "Eres un optimizador de asignacion de recursos humanos.\n"
+                            "Recibirás actividades de una política y empleados disponibles.\n"
                             "Asigna el empleado más apto a cada actividad teniendo en cuenta:\n"
-                            "- El departamento de la actividad (lane_name) vs el rol del empleado\n"
-                            "- Su carga actual (current_pending_tasks): menos es mejor\n"
-                            "- Su eficiencia historica (avg_completion_hours): menos es mejor\n"
-                            "- Distribuye la carga equitativamente; evita saturar a un solo empleado.\n"
+                            "- Asigna ÚNICAMENTE a un empleado que pertenezca al departamento de la actividad (el department_id del empleado debe coincidir exactamente con el lane_id de la actividad).\n"
+                            "- Considera su carga actual (current_pending_tasks): menos es mejor.\n"
+                            "- Considera su eficiencia histórica (avg_completion_hours): menos es mejor.\n"
+                            "- Distribuye la carga equitativamente si hay múltiples empleados en el mismo departamento.\n"
                             "Devuelve UNICAMENTE un JSON con la clave 'assignments', "
                             "array de objetos con: 'activity_uuid' (string), 'employee_uuid' (string), 'justification' (string breve en español)."
                         )
@@ -367,3 +530,316 @@ JSON ACTUAL DEL DIAGRAMA:
             raise HTTPException(status_code=500, detail="La respuesta de Groq no es un JSON válido.")
         except Exception as e:
             raise HTTPException(status_code=503, detail=f"Error al comunicarse con la API de Groq: {str(e)}")
+
+    def compile_report(self, request: NlpCompileReportRequest) -> dict:
+        prompt_lower = request.prompt.lower()
+
+        system_prompt = """Eres un experto analista de datos de MongoDB. Convierte instrucciones en lenguaje natural (español) en especificaciones JSON para consultas de agregación MongoDB.
+
+COLECCIONES DISPONIBLES:
+1. `policy_instances`: id, uuid, policyId (ref→policies.uuid), applicantId, managerId, status ("ACTIVE"|"COMPLETED"|"CANCELLED"), currentAssigneeId, currentAssigneeRole, instanceData (object), history (array: activityNodeId, assigneeId, action, timestamp, formDataAtStep), createdAt (Date BSON), updatedAt (Date BSON).
+2. `policies`: id, uuid, name, description, managerId, ownerId, lanes (array: _id, name ej: "Empleado","Recursos Humanos","Legal"), activityNodes (array: uuid, name, type, laneId).
+3. `users`: id, uuid, name, lastname, email, role, departmentId.
+4. `departments`: id, uuid, name.
+
+FORMATO DE RESPUESTA (JSON estricto, sin bloques markdown):
+{
+  "title": "Título del reporte",
+  "description": "Breve descripción del objetivo",
+  "collection": "policy_instances",
+  "pipeline": [ /* etapas: $match, $group, $project, $sort, $limit, $lookup, $unwind, $addFields */ ],
+  "columns": [ {"key": "campo_resultado", "label": "Etiqueta Español"} ],
+  "kpis": [ {"title": "Nombre", "value_key": "campo", "format": "number"} ],
+  "chart": {"type": "bar|pie", "x_key": "campo_categoría", "y_key": "campo_numérico"}
+}
+
+REGLAS CRÍTICAS:
+1. createdAt y updatedAt SON Date BSON nativos. Para duración usa: {"$divide": [{"$subtract": ["$updatedAt", "$createdAt"]}, 3600000]}. NUNCA uses $dateFromString.
+2. Para filtrar por política: $lookup a "policies" (localField:"policyId", foreignField:"uuid", as:"policy_info"), $unwind, y $match con $regex de subcadena SIN anclas ^ ni $ (ej: {"policy_info.name": {"$regex": "presupuesto", "$options": "i"}}).
+3. Para filtrar por departamento: $lookup a "policies" y filtrar "policy_info.lanes.name" con $regex, O $lookup a "users" + "departments" y filtrar "dept_info.name".
+4. Después de $group, los campos agrupados están en "_id". Proyéctalos desde "$_id" (si _id es string) o "$_id.campo" (si _id es objeto), NUNCA desde la raíz del documento.
+5. NO filtres por status ("COMPLETED"/"ACTIVE") a menos que el usuario lo pida explícitamente con palabras como "completados", "activos", "finalizados".
+6. "chart" es OBLIGATORIO solo si el usuario pide gráfico (barras/pastel/pie/patel). "y_key" DEBE ser numérico.
+7. Para duración de ACTIVIDADES individuales: $unwind "$history", $group por {policyId, activityNodeId}, calcular avgDurationHours con $avg, luego $lookup policies para obtener nombre de actividad con $let/$filter sobre activityNodes.
+8. Para nombre de funcionarios: $lookup a "users" (localField:"assigneeId" o "currentAssigneeId", foreignField:"uuid", as:"assignee_info"), $unwind preservando nulos, y concatenar name+lastname.
+9. Para departamento del funcionario: después del lookup de users, $lookup a "departments" (localField:"assignee_info.departmentId", foreignField:"uuid", as:"assignee_dept"), $unwind preservando nulos.
+10. NO incluyas campos técnicos como "uuid" o "id" en el reporte a menos que el usuario lo pida explícitamente. Usa siempre nombres legibles (ej. policyName, activityName).
+
+EJEMPLOS DE REFERENCIA:
+
+Prompt: "Muestra el porcentaje de solicitudes completadas vs activas en un gráfico de pastel"
+{"title":"Distribución por Estado","description":"Porcentaje de instancias por estado","collection":"policy_instances","pipeline":[{"$group":{"_id":"$status","count":{"$sum":1}}},{"$project":{"_id":0,"status":"$_id","count":"$count"}}],"columns":[{"key":"status","label":"Estado"},{"key":"count","label":"Cantidad"}],"kpis":[{"title":"Total","value_key":"count","format":"number"}],"chart":{"type":"pie","x_key":"status","y_key":"count"}}
+
+Prompt: "Muestra las instancias del departamento legal que más tardaron, top 3 en gráfico pastel"
+{"title":"Top 3 Instancias Más Lentas - Legal","description":"Instancias con mayor duración del depto Legal","collection":"policy_instances","pipeline":[{"$lookup":{"from":"policies","localField":"policyId","foreignField":"uuid","as":"policy_info"}},{"$unwind":"$policy_info"},{"$match":{"policy_info.lanes.name":{"$regex":"legal","$options":"i"}}},{"$addFields":{"durationHours":{"$divide":[{"$subtract":["$updatedAt","$createdAt"]},3600000]}}},{"$project":{"_id":0,"policyName":"$policy_info.name","durationHours":{"$round":["$durationHours",1]}}},{"$sort":{"durationHours":-1}},{"$limit":3}],"columns":[{"key":"policyName","label":"Política"},{"key":"durationHours","label":"Duración (Horas)"}],"kpis":[{"title":"Instancias","value_key":"count","format":"number"}],"chart":{"type":"pie","x_key":"policyName","y_key":"durationHours"}}
+
+Prompt: "Top 10 actividades que más tardan con nombre de funcionarios y departamento"
+{"title":"Top 10 Actividades Más Lentas","description":"Actividades con mayor duración promedio","collection":"policy_instances","pipeline":[{"$match":{"history.0":{"$exists":true}}},{"$unwind":"$history"},{"$group":{"_id":{"policyId":"$policyId","activityNodeId":"$history.activityNodeId"},"avgDurationHours":{"$avg":{"$divide":[{"$subtract":["$history.timestamp","$createdAt"]},3600000]}},"assigneeId":{"$first":"$history.assigneeId"}}},{"$lookup":{"from":"policies","localField":"_id.policyId","foreignField":"uuid","as":"policy_info"}},{"$unwind":"$policy_info"},{"$lookup":{"from":"users","localField":"assigneeId","foreignField":"uuid","as":"assignee_info"}},{"$unwind":{"path":"$assignee_info","preserveNullAndEmptyArrays":true}},{"$lookup":{"from":"departments","localField":"assignee_info.departmentId","foreignField":"uuid","as":"assignee_dept"}},{"$unwind":{"path":"$assignee_dept","preserveNullAndEmptyArrays":true}},{"$project":{"_id":0,"policyName":"$policy_info.name","activityName":{"$let":{"vars":{"matchedNode":{"$filter":{"input":"$policy_info.activityNodes","as":"n","cond":{"$eq":["$$n.uuid","$_id.activityNodeId"]}}}},"in":{"$arrayElemAt":["$$matchedNode.name",0]}}},"avgDurationHours":{"$round":["$avgDurationHours",1]},"funcionario":{"$concat":["$assignee_info.name"," ","$assignee_info.lastname"]},"departamento":"$assignee_dept.name"}},{"$sort":{"avgDurationHours":-1}},{"$limit":10}],"columns":[{"key":"policyName","label":"Política"},{"key":"activityName","label":"Actividad"},{"key":"avgDurationHours","label":"Duración Promedio (Horas)"},{"key":"funcionario","label":"Funcionario"},{"key":"departamento","label":"Departamento"}],"kpis":[{"title":"Actividades","value_key":"count","format":"number"}],"chart":null}
+
+Devuelve ÚNICAMENTE el JSON."""
+
+        try:
+            user_content = request.prompt
+            if hasattr(request, 'error_context') and request.error_context:
+                user_content += f"\n\n[ERROR EN PIPELINE ANTERIOR: {request.error_context}. Corrige el pipeline para evitar este error.]"
+
+            clean_text = None
+            try:
+                print("Calling Groq complex model for compile_report...")
+                response = self.client.chat.completions.create(
+                    model=self.model_complex,
+                    response_format={"type": "json_object"},
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_content}
+                    ]
+                )
+                clean_text = self._clean_json_response(response.choices[0].message.content)
+            except Exception as e_complex:
+                print(f"WARNING: Groq complex model compile_report failed: {str(e_complex)}. Falling back to fast model.")
+                try:
+                    response = self.client.chat.completions.create(
+                        model=self.model_fast,
+                        response_format={"type": "json_object"},
+                        messages=[
+                            {"role": "system", "content": system_prompt},
+                            {"role": "user", "content": user_content}
+                        ]
+                    )
+                    clean_text = self._clean_json_response(response.choices[0].message.content)
+                except Exception as e_fast:
+                    err_msg = str(e_fast)
+                    print(f"WARNING: Groq fast model JSON validation call failed: {err_msg}")
+                    failed_gen = None
+                    if hasattr(e_fast, "body") and isinstance(e_fast.body, dict) and "error" in e_fast.body:
+                        failed_gen = e_fast.body["error"].get("failed_generation")
+                    if failed_gen:
+                        print("Retrieved failed generation from Groq error body. Applying typo fixes.")
+                        clean_text = self._clean_json_response(failed_gen)
+                    else:
+                        print("Retrying fast model without response_format constraints.")
+                        response = self.client.chat.completions.create(
+                            model=self.model_fast,
+                            messages=[
+                                {"role": "system", "content": system_prompt},
+                                {"role": "user", "content": user_content}
+                            ]
+                        )
+                        clean_text = self._clean_json_response(response.choices[0].message.content)
+
+            print("--- RAW TEXT FROM GROQ ---")
+            print(clean_text)
+            clean_text = self._fix_json_typos(clean_text)
+            print("--- FIXED TEXT ---")
+            print(clean_text)
+
+            try:
+                result = json.loads(clean_text)
+            except json.JSONDecodeError as decode_err:
+                print(f"JSONDecodeError: {str(decode_err)}. Trying to fix manually.")
+                clean_text = self._fix_json_typos(clean_text)
+                result = json.loads(clean_text)
+
+            # Pipeline cleanup and sanitization
+            if "pipeline" in result and isinstance(result["pipeline"], list):
+                new_pipeline = []
+                for stage in result["pipeline"]:
+                    if isinstance(stage, dict):
+                        if "$lookup" in stage:
+                            lookup = stage["$lookup"]
+                            if lookup.get("from") == "policies.activityNodes":
+                                lookup["from"] = "policies"
+
+                        if "$match" in stage:
+                            match_stage = stage["$match"]
+                            for key in list(match_stage.keys()):
+                                if key in ("departmentName", "department", "departamento", "dept", "lane", "laneName"):
+                                    match_stage.pop(key)
+
+                            if "status" in match_stage:
+                                val = match_stage["status"]
+                                is_status_filter = False
+                                if isinstance(val, str) and val in ("COMPLETED", "ACTIVE"):
+                                    is_status_filter = True
+                                elif isinstance(val, dict):
+                                    for k, v in val.items():
+                                        if isinstance(v, str) and v in ("COMPLETED", "ACTIVE"):
+                                            is_status_filter = True
+                                        elif isinstance(v, list) and any(item in ("COMPLETED", "ACTIVE") for item in v):
+                                            is_status_filter = True
+                                if is_status_filter:
+                                    status_kw = ["completad", "finaliz", "terminad", "activ", "cancelad"]
+                                    if not any(w in prompt_lower for w in status_kw):
+                                        match_stage.pop("status")
+
+                            if not match_stage:
+                                continue
+                    new_pipeline.append(stage)
+
+                result["pipeline"] = self._sanitize_pipeline(new_pipeline)
+
+            self._process_regex_recursive(result)
+
+            chart_keywords = ["grafic", "gráfi", "barra", "pastel", "patel", "pie", "chart", "plot", "dibuj", "visualiz"]
+            has_chart_intent = any(k in prompt_lower for k in chart_keywords)
+            if not has_chart_intent and "chart" in result:
+                result.pop("chart", None)
+
+            result = self._auto_correct_sort(result, request.prompt)
+            return result
+        except json.JSONDecodeError:
+            raise HTTPException(status_code=500, detail="La respuesta del LLM no es un JSON válido después de corregirla.")
+        except Exception as e:
+            raise HTTPException(status_code=503, detail=f"Error al comunicarse con la API de Groq: {str(e)}")
+
+    def _sanitize_pipeline(self, pipeline: list) -> list:
+        valid_stages = {
+            "$match", "$group", "$project", "$sort", "$limit", 
+            "$lookup", "$unwind", "$addFields", "$skip", "$count", "$facet"
+        }
+        sanitized = []
+        for stage in pipeline:
+            if isinstance(stage, dict):
+                # Filter out unsupported operations
+                clean_stage = {k: v for k, v in stage.items() if k in valid_stages}
+                if clean_stage:
+                    sanitized.append(clean_stage)
+        return sanitized
+
+    def _auto_correct_sort(self, result: dict, prompt: str) -> dict:
+        if "pipeline" not in result or not isinstance(result["pipeline"], list):
+            return result
+            
+        pipeline = result["pipeline"]
+        prompt_lower = prompt.lower()
+        
+        desc_keywords = [
+            "mas tardaron", "más tardaron", "tardaron más", "tardaron mas", "que mas tardan", "que más tardan",
+            "mayor duracion", "mayor duración", "duración más", "duracion mas", "más larga", "mas larga",
+            "más lenta", "mas lenta", "más lentas", "mas lentas", "más lentos", "mas lentos",
+            "cuello de botella", "cuellos de botella"
+        ]
+        asc_keywords = [
+            "menos tardaron", "menos se tardan", "menos tardan", "más rápida", "mas rapida",
+            "más rápidas", "mas rapidas", "menor duracion", "menor duración", "más corta", "mas corta",
+            "más rápido", "mas rapido", "más rápidos", "mas rapidos"
+        ]
+        
+        should_be_desc = any(k in prompt_lower for k in desc_keywords)
+        should_be_asc = any(k in prompt_lower for k in asc_keywords)
+        
+        if should_be_desc or should_be_asc:
+            for stage in pipeline:
+                if isinstance(stage, dict) and "$sort" in stage and isinstance(stage["$sort"], dict):
+                    sort_dict = stage["$sort"]
+                    for key in list(sort_dict.keys()):
+                        # Look for duration keys or value keys
+                        if any(x in key.lower() for x in ["duration", "hours", "avg", "time", "tard"]):
+                            if should_be_desc:
+                                sort_dict[key] = -1
+                            elif should_be_asc:
+                                sort_dict[key] = 1
+                                
+        return result
+
+    def _make_accent_insensitive(self, pattern: str) -> str:
+        mapping = {
+            'a': '[aáAÁ]', 'á': '[aáAÁ]',
+            'e': '[eéEÉ]', 'é': '[eéEÉ]',
+            'i': '[iíIÍ]', 'í': '[iíIÍ]',
+            'o': '[oóOÓ]', 'ó': '[oóOÓ]',
+            'u': '[uúüUÚÜ]', 'ú': '[uúüUÚÜ]', 'ü': '[uúüUÚÜ]',
+            'n': '[nñNÑ]', 'ñ': '[nñNÑ]'
+        }
+        res = []
+        for c in pattern:
+            c_low = c.lower()
+            if c_low in mapping:
+                res.append(mapping[c_low])
+            else:
+                res.append(c)
+        return "".join(res)
+
+    def _process_regex_recursive(self, obj):
+        if isinstance(obj, dict):
+            # Auto-correct options and regex keys
+            if "options" in obj and ("$regex" in obj or "regex" in obj):
+                obj["$options"] = obj.pop("options")
+            if "regex" in obj:
+                obj["$regex"] = obj.pop("regex")
+                
+            # Double check for lowercase options alongside $regex
+            for k in list(obj.keys()):
+                if k == "options" and ("$regex" in obj or "regex" in obj):
+                    obj["$options"] = obj.pop("options")
+            
+            if "$regex" in obj and isinstance(obj["$regex"], str):
+                obj["$regex"] = self._make_accent_insensitive(obj["$regex"])
+            
+            for key, val in list(obj.items()):
+                self._process_regex_recursive(val)
+        elif isinstance(obj, list):
+            for item in obj:
+                self._process_regex_recursive(item)
+
+    def _fix_json_typos(self, text: str) -> str:
+        # 1. Remove unnecessary and invalid $dateFromString wrappers on BSON Dates
+        date_pattern = re.compile(
+            r'\{\s*"\$dateFromString"\s*:\s*\{\s*"dateString"\s*:\s*("\$.*?")\s*\}\s*\}',
+            re.DOTALL
+        )
+        text = date_pattern.sub(r'\1', text)
+        
+        # 2. Fix invalid "$divide": { "$subtract": [ ... ], 3600000 } syntax
+        pattern = re.compile(
+            r'"\$divide"\s*:\s*\{\s*"\$subtract"\s*:\s*(\[.*?\])\s*,\s*(\d+)\s*\}', 
+            re.DOTALL
+        )
+        text = pattern.sub(r'"$divide": [ { "$subtract": \1 }, \2 ]', text)
+        return text
+
+    def analyze_report_data(self, request: NlpAnalyzeDataRequest) -> dict:
+        try:
+            data_str = json.dumps(request.data, ensure_ascii=False, indent=2)
+            system_prompt = (
+                "Analiza los siguientes datos de ejecución de workflows de la empresa y responde a la pregunta del usuario. "
+                "Redacta un informe ejecutivo claro, detallado y profesional en español de 2 párrafos explicando "
+                "los resultados, posibles cuellos de botella (o estado general) y sugiriendo mejoras concretas. "
+                "Tu respuesta será inyectada en un PDF, por lo que debe ser redactada en tono formal y directo sin usar caracteres especiales como asteriscos."
+            )
+            user_content = f"Pregunta del usuario: '{request.prompt}'\n\nDatos recuperados:\n{data_str}"
+            
+            try:
+                response = self.client.chat.completions.create(
+                    model=self.model_complex,
+                    messages=[
+                        {
+                            "role": "system",
+                            "content": system_prompt
+                        },
+                        {
+                            "role": "user",
+                            "content": user_content
+                        }
+                    ]
+                )
+            except Exception as inner_e:
+                print(f"WARNING: complex model failed due to rate limits or error ({str(inner_e)}). Falling back to fast model.")
+                response = self.client.chat.completions.create(
+                    model=self.model_fast,
+                    messages=[
+                        {
+                            "role": "system",
+                            "content": system_prompt
+                        },
+                        {
+                            "role": "user",
+                            "content": user_content
+                        }
+                    ]
+                )
+            
+            analysis_text = response.choices[0].message.content.strip()
+            return {"analysis": analysis_text}
+        except Exception as e:
+            raise HTTPException(status_code=503, detail=f"Error al comunicarse con Deep Learning Engine para análisis: {str(e)}")

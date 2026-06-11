@@ -5,6 +5,12 @@ export interface FormField {
   columns?: string[]; // for type='grid': column header names
 }
 
+export interface RequiredDocument {
+  name: string;
+  description: string;
+  required: boolean;
+}
+
 export interface ActivityNode {
   uuid: string;
   name?: string;
@@ -15,6 +21,8 @@ export interface ActivityNode {
   laneId: string;
   assigneeId?: string;
   formSchemaJson?: any;
+  allowFileUpload?: boolean;
+  requiredDocuments?: RequiredDocument[];
 }
 
 export interface Transition {

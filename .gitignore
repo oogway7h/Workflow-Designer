@@ -28,3 +28,4 @@ ia_service/**/*.pyc
 # OS
 .DS_Store
 Thumbs.db
+.agents/

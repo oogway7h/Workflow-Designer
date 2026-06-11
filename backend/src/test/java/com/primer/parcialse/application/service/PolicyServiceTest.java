@@ -104,4 +104,46 @@ class PolicyServiceTest {
                 assertThat(response.getManagerId()).isEqualTo("manager-2");
                 assertThat(response.getOwnerId()).isEqualTo("designer-new");
         }
+
+        @Test
+        void updateDiagramShouldPreserveRequiredDocuments() {
+                Policy existingPolicy = Policy.builder()
+                                .uuid("policy-1")
+                                .name("Nombre Original")
+                                .description("Original")
+                                .managerId("manager-1")
+                                .ownerId("designer-old")
+                                .state("DRAFT")
+                                .build();
+
+                com.primer.parcialse.domain.model.RequiredDocument doc = com.primer.parcialse.domain.model.RequiredDocument.builder()
+                                .name("CV")
+                                .description("Curriculum")
+                                .required(true)
+                                .build();
+
+                com.primer.parcialse.domain.model.ActivityNode node = com.primer.parcialse.domain.model.ActivityNode.builder()
+                                .uuid("node-1")
+                                .name("Actividad 1")
+                                .description("Desc 1")
+                                .state("ACTIVITY")
+                                .allowFileUpload(true)
+                                .requiredDocuments(List.of(doc))
+                                .build();
+
+                com.primer.parcialse.application.dto.policy.PolicyDiagramDTO diagramDTO = new com.primer.parcialse.application.dto.policy.PolicyDiagramDTO(
+                                List.of(node),
+                                List.of(),
+                                List.of());
+
+                when(policyRepository.findByUuid("policy-1")).thenReturn(Optional.of(existingPolicy));
+                when(policyRepository.save(any(Policy.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+                PolicyResponseDTO response = policyService.updateDiagram("policy-1", diagramDTO);
+
+                assertThat(response.getActivityNodes()).hasSize(1);
+                assertThat(response.getActivityNodes().get(0).getAllowFileUpload()).isTrue();
+                assertThat(response.getActivityNodes().get(0).getRequiredDocuments()).hasSize(1);
+                assertThat(response.getActivityNodes().get(0).getRequiredDocuments().get(0).getName()).isEqualTo("CV");
+        }
 }

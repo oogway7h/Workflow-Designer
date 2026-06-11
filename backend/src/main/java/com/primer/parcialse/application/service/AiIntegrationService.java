@@ -12,6 +12,7 @@ import com.primer.parcialse.application.dto.ai.RoutingRequestDTO;
 import com.primer.parcialse.application.dto.ai.RoutingResponseDTO;
 import com.primer.parcialse.application.dto.ai.NlpIntentRequestDTO;
 import com.primer.parcialse.application.dto.ai.NlpIntentResponseDTO;
+import com.primer.parcialse.application.dto.ai.RouteIntentRequestDTO;
 import com.primer.parcialse.application.dto.ai.NlpNavigateRequestDTO;
 import com.primer.parcialse.application.dto.ai.NlpNavigateResponseDTO;
 import com.primer.parcialse.application.dto.ai.NlpFillFormRequestDTO;
@@ -22,6 +23,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestClientException;
 import org.springframework.web.client.RestTemplate;
+import java.util.Map;
 
 @Service
 @RequiredArgsConstructor
@@ -103,6 +105,69 @@ public class AiIntegrationService {
                     AutoAssignPolicyResponseDTO.class);
         } catch (RestClientException e) {
             throw new AiServiceUnavailableException("Error de timeout o indisponibilidad en la IA", e);
+        }
+    }
+
+    // --- Deep Learning Endpoints ---
+
+    public Object routeIntent(RouteIntentRequestDTO req) {
+        try {
+            String effectiveText = req.getEffectiveText();
+            java.util.Map<String, String> payload = java.util.Map.of("text", effectiveText != null ? effectiveText : "");
+            return restTemplate.postForObject(aiMicroserviceUrl + "/dl/route-intent", payload, Object.class);
+        } catch (RestClientException e) {
+            throw new AiServiceUnavailableException("Error al comunicarse con el motor DL de enrutamiento", e);
+        }
+    }
+
+    public Object analyzeBottlenecksDL(Map<String, Object> req) {
+        try {
+            return restTemplate.postForObject(aiMicroserviceUrl + "/dl/analyze-bottlenecks", req, Object.class);
+        } catch (RestClientException e) {
+            throw new AiServiceUnavailableException("Error al comunicarse con el motor DL de anomalías", e);
+        }
+    }
+
+    public Object findBestRoute(Map<String, Object> req) {
+        try {
+            return restTemplate.postForObject(aiMicroserviceUrl + "/dl/best-route", req, Object.class);
+        } catch (RestClientException e) {
+            throw new AiServiceUnavailableException("Error al comunicarse con el motor DL de optimización", e);
+        }
+    }
+
+    public Object getDlStatus() {
+        try {
+            return restTemplate.getForObject(aiMicroserviceUrl + "/dl/status", Object.class);
+        } catch (RestClientException e) {
+            throw new AiServiceUnavailableException("Error al comunicarse con el estado del motor DL", e);
+        }
+    }
+
+    public Object trainDlModels(Map<String, Object> req) {
+        try {
+            return restTemplate.postForObject(aiMicroserviceUrl + "/dl/train", req, Object.class);
+        } catch (RestClientException e) {
+            throw new AiServiceUnavailableException("Error al iniciar el entrenamiento de los modelos DL", e);
+        }
+    }
+
+    public Object compileReport(Map<String, String> req) {
+        try {
+            return restTemplate.postForObject(aiMicroserviceUrl + "/nlp/compile-report", req, Object.class);
+        } catch (org.springframework.web.client.HttpStatusCodeException e) {
+            System.err.println("FastAPI HTTP Error: " + e.getStatusCode() + " - " + e.getResponseBodyAsString());
+            throw new AiServiceUnavailableException("Error al comunicarse con el compilador de reportes NLP", e);
+        } catch (RestClientException e) {
+            throw new AiServiceUnavailableException("Error al comunicarse con el compilador de reportes NLP", e);
+        }
+    }
+
+    public Map<String, Object> analyzeReportData(Map<String, Object> req) {
+        try {
+            return restTemplate.postForObject(aiMicroserviceUrl + "/nlp/analyze-data", req, Map.class);
+        } catch (RestClientException e) {
+            throw new AiServiceUnavailableException("Error al comunicarse con el servicio de análisis de datos de IA", e);
         }
     }
 }

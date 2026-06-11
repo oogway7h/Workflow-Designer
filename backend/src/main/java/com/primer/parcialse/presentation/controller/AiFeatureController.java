@@ -7,6 +7,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.primer.parcialse.application.dto.ai.NlpIntentRequestDTO;
 import com.primer.parcialse.application.dto.ai.ModifyDiagramRequestDTO;
 import com.primer.parcialse.application.dto.ai.NlpIntentResponseDTO;
+import com.primer.parcialse.application.dto.ai.RouteIntentRequestDTO;
 import com.primer.parcialse.application.dto.ai.NlpNavigateRequestDTO;
 import com.primer.parcialse.application.dto.ai.NlpNavigateResponseDTO;
 import com.primer.parcialse.application.dto.ai.NlpFillFormRequestDTO;
@@ -31,6 +32,7 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.util.List;
 import java.util.Map;
 
 @RestController
@@ -46,6 +48,48 @@ public class AiFeatureController {
 
     @PostMapping("/ai/chat")
     public ResponseEntity<AssistantResponseDTO> chat(@RequestBody AssistantRequestDTO request) {
+        try {
+            List<com.primer.parcialse.application.dto.policy.PolicyResponseDTO> policies = policyService.getAll();
+            StringBuilder contextBuilder = new StringBuilder();
+            contextBuilder.append("\n[CONTEXT_POLICIES_DOCUMENTS]\n");
+            contextBuilder.append("Trámites/Políticas disponibles y sus documentos requeridos:\n");
+            for (var policy : policies) {
+                if ("ACTIVE".equalsIgnoreCase(policy.getState())) {
+                    contextBuilder.append("- Trámite: \"").append(policy.getName()).append("\"\n");
+                    contextBuilder.append("  Descripción: ").append(policy.getDescription()).append("\n");
+                    boolean hasDocs = false;
+                    if (policy.getActivityNodes() != null) {
+                        for (var node : policy.getActivityNodes()) {
+                            if (Boolean.TRUE.equals(node.getAllowFileUpload()) && node.getRequiredDocuments() != null && !node.getRequiredDocuments().isEmpty()) {
+                                if (!hasDocs) {
+                                    contextBuilder.append("  Documentos requeridos por actividad:\n");
+                                    hasDocs = true;
+                                }
+                                contextBuilder.append("    * Actividad \"").append(node.getName()).append("\": ");
+                                for (int i = 0; i < node.getRequiredDocuments().size(); i++) {
+                                    var reqDoc = node.getRequiredDocuments().get(i);
+                                    contextBuilder.append(reqDoc.getName())
+                                                 .append(" (")
+                                                 .append(Boolean.TRUE.equals(reqDoc.getRequired()) ? "Obligatorio" : "Opcional")
+                                                 .append(")");
+                                    if (i < node.getRequiredDocuments().size() - 1) {
+                                        contextBuilder.append(", ");
+                                    }
+                                }
+                                contextBuilder.append("\n");
+                            }
+                        }
+                    }
+                    if (!hasDocs) {
+                        contextBuilder.append("  Documentos requeridos: Ninguno.\n");
+                    }
+                }
+            }
+            String existingScreenData = request.getScreenData() != null ? request.getScreenData() : "";
+            request.setScreenData(existingScreenData + contextBuilder.toString());
+        } catch (Exception e) {
+            System.err.println("Error appending policy document requirements to AI context: " + e.getMessage());
+        }
         return ResponseEntity.ok(aiIntegrationService.getAssistantSuggestion(request));
     }
 
@@ -220,5 +264,80 @@ public class AiFeatureController {
     @PostMapping("/ai/nlp/fill-form")
     public ResponseEntity<NlpFillFormResponseDTO> nlpFillForm(@RequestBody NlpFillFormRequestDTO request) {
         return ResponseEntity.ok(aiIntegrationService.nlpFillForm(request));
+    }
+
+    // --- Deep Learning Endpoints ---
+
+    @PostMapping("/ai/dl/route-intent")
+    public ResponseEntity<?> dlRouteIntent(@RequestBody RouteIntentRequestDTO request) {
+        return ResponseEntity.ok(aiIntegrationService.routeIntent(request));
+    }
+
+    @GetMapping("/ai/dl/analyze-bottlenecks/{policyId}")
+    @PreAuthorize("hasAnyRole('ADMIN', 'MANAGER', 'DESIGNER')")
+    public ResponseEntity<?> dlAnalyzeBottlenecksForPolicy(@PathVariable String policyId) {
+        return ResponseEntity.ok(workflowAnalyticsService.analyzePolicyBottlenecksDL(policyId));
+    }
+
+    @PostMapping("/ai/dl/suggest-policies")
+    public ResponseEntity<?> dlSuggestPolicies(@RequestBody RouteIntentRequestDTO request) {
+        try {
+            Object predictionResult = aiIntegrationService.routeIntent(request);
+            if (predictionResult instanceof Map) {
+                Map<String, Object> predictionsMap = (Map<String, Object>) predictionResult;
+                List<Map<String, Object>> allPredictions = (List<Map<String, Object>>) predictionsMap.get("all_predictions");
+                
+                List<Map<String, Object>> suggestions = new java.util.ArrayList<>();
+                if (allPredictions != null) {
+                    for (Map<String, Object> pred : allPredictions) {
+                        String policyId = (String) pred.get("policy_id");
+                        Double confidence = (Double) pred.get("confidence");
+                        
+                        try {
+                            com.primer.parcialse.application.dto.policy.PolicyResponseDTO policy = policyService.getByUuid(policyId);
+                            if (policy != null) {
+                                Map<String, Object> suggestion = new java.util.HashMap<>();
+                                suggestion.put("uuid", policy.getUuid());
+                                suggestion.put("name", policy.getName());
+                                suggestion.put("description", policy.getDescription());
+                                suggestion.put("state", policy.getState());
+                                suggestion.put("confidence", confidence);
+                                suggestions.add(suggestion);
+                            }
+                        } catch (com.primer.parcialse.domain.exception.ResourceNotFoundException e) {
+                            // Ignorar si la política no existe en DB
+                        }
+                    }
+                }
+                return ResponseEntity.ok(suggestions);
+            }
+            return ResponseEntity.ok(predictionResult);
+        } catch (Exception e) {
+            return ResponseEntity.internalServerError().body(Map.of("error", e.getMessage()));
+        }
+    }
+
+    @PostMapping("/ai/dl/analyze-bottlenecks")
+    @PreAuthorize("hasAnyRole('ADMIN', 'MANAGER', 'DESIGNER')")
+    public ResponseEntity<?> dlAnalyzeBottlenecks(@RequestBody Map<String, Object> request) {
+        return ResponseEntity.ok(aiIntegrationService.analyzeBottlenecksDL(request));
+    }
+
+    @PostMapping("/ai/dl/best-route")
+    @PreAuthorize("hasAnyRole('ADMIN', 'MANAGER', 'DESIGNER')")
+    public ResponseEntity<?> dlBestRoute(@RequestBody Map<String, Object> request) {
+        return ResponseEntity.ok(aiIntegrationService.findBestRoute(request));
+    }
+
+    @GetMapping("/ai/dl/status")
+    @PreAuthorize("hasRole('ADMIN')")
+    public ResponseEntity<?> dlStatus() {
+        return ResponseEntity.ok(aiIntegrationService.getDlStatus());
+    }
+
+    @PostMapping("/ai/dl/train")
+    @PreAuthorize("hasRole('ADMIN')")
+    public ResponseEntity<?> dlTrain(@RequestBody Map<String, Object> request) {
+        return ResponseEntity.ok(aiIntegrationService.trainDlModels(request));
     }
 }

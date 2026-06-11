@@ -17,7 +17,8 @@ import { es } from 'date-fns/locale';
         <div>
           <h1 class="text-3xl font-bold tracking-tight">Trámites Entrantes</h1>
           <p class="text-muted-foreground">
-            Solicitudes de clientes (B2C) pendientes de asignación.
+            Solicitudes de clientes pendientes de asignación.
+          (Aqui se mostraran trámites que vengan de la app móvil)
           </p>
         </div>
         <lucide-icon [img]="Inbox" class="w-8 h-8 text-muted-foreground opacity-50" />
@@ -117,7 +118,7 @@ export class IncomingRequestsComponent implements OnInit {
 
   claimRequest(instanceId: string) {
     if (this.isClaiming()) return;
-    
+
     this.isClaiming.set(true);
     this.policyService.claimInstance(instanceId).subscribe({
       next: (instance) => {
