@@ -9,12 +9,21 @@ from domain.models import (
 )
 import json
 import re
+from pymongo import MongoClient
+from dotenv import dotenv_values
+from datetime import datetime, timedelta
 
 class AIService:
     def __init__(self):
         self.client = Groq(api_key=os.environ.get("GROQ_API_KEY"))
         self.model_fast = 'llama-3.1-8b-instant'
         self.model_complex = 'llama-3.3-70b-versatile'
+        try:
+            backend_env_path = os.path.abspath(os.path.join(os.path.dirname(os.path.dirname(__file__)), "..", "backend", ".env"))
+            config = dotenv_values(backend_env_path)
+            self.mongo_uri = config.get("MONGODB_URI") or "mongodb+srv://carlosotsu77_db_user:7NswqWr1fSMFpShn@workflow.gaut4jc.mongodb.net/workflow_engine_db?retryWrites=true&w=majority"
+        except Exception:
+            self.mongo_uri = "mongodb+srv://carlosotsu77_db_user:7NswqWr1fSMFpShn@workflow.gaut4jc.mongodb.net/workflow_engine_db?retryWrites=true&w=majority"
 
     def suggest_field(self, request: SuggestFieldRequest) -> str:
         try:
@@ -169,14 +178,16 @@ JSON ACTUAL DEL DIAGRAMA:
                         if predictor.is_trained():
                             activities = screen_data_dict.get('dlAnalyticsResult', [])
                             employees = screen_data_dict.get('availableEmployees', [])
+                            policy_name = screen_data_dict.get('selectedPolicyName', 'default_policy')
                             
                             optimal_list = []
-                            simulated_load = {emp["id"]: 0 for emp in employees}
+                            simulated_load = {emp["id"]: emp.get("currentPendingTasks", 0) for emp in employees}
                             seen_tasks = set()
                             for act in activities:
-                                task_name = act.get('task_name') or act.get('task_id', '')
-                                if not task_name or task_name in seen_tasks: continue
-                                seen_tasks.add(task_name)
+                                task_id = act.get('task_id', '')
+                                task_name = act.get('task_name') or task_id
+                                if not task_id or task_id in seen_tasks: continue
+                                seen_tasks.add(task_id)
                                 
                                 # Filtrar candidatos: deben pertenecer al mismo departamento (lane_id / department_id)
                                 task_dept = act.get('department_id')
@@ -195,7 +206,7 @@ JSON ACTUAL DEL DIAGRAMA:
                                     
                                 if not cands: continue
                                     
-                                best_result = predictor.find_best_assignee("default_policy", task_name, cands)
+                                best_result = predictor.find_best_assignee(policy_name, task_id, cands)
                                 best_id = best_result["best_employee_id"]
                                 best_emp = next((e for e in employees if e["id"] == best_id), None)
                                 if best_emp:
@@ -471,7 +482,7 @@ JSON ACTUAL DEL DIAGRAMA:
                     
                     # Predice el mejor funcionario para esta actividad
                     best_result = predictor.find_best_assignee(
-                        policy_id="default_policy", 
+                        policy_id=request.policy_name, 
                         activity_id=activity.uuid, 
                         candidates=candidates
                     )
@@ -531,10 +542,128 @@ JSON ACTUAL DEL DIAGRAMA:
         except Exception as e:
             raise HTTPException(status_code=503, detail=f"Error al comunicarse con la API de Groq: {str(e)}")
 
+    def _get_optimized_db_context(self, prompt: str) -> str:
+        try:
+            client = MongoClient(self.mongo_uri)
+            db = client.get_default_database()
+            if db is None:
+                db = client["workflow_engine_db"]
+            
+            prompt_lower = prompt.lower()
+            
+            # 1. Resolve matching policies
+            policies = []
+            db_policies = list(db["policies"].find())
+            for p in db_policies:
+                p_name = p.get("name", "")
+                keywords = [w.strip(",.!?\"'") for w in p_name.lower().split() if len(w) > 3]
+                is_match = False
+                if not keywords:
+                    is_match = p_name.lower() in prompt_lower
+                else:
+                    is_match = any(kw in prompt_lower for kw in keywords)
+                
+                if is_match:
+                    acts = []
+                    for node in p.get("activityNodes", []):
+                        acts.append({
+                            "uuid": node.get("uuid", ""),
+                            "name": node.get("name", "")
+                        })
+                    policies.append({
+                        "uuid": p.get("uuid", ""),
+                        "name": p.get("name", ""),
+                        "activities": acts
+                    })
+            
+            if not policies:
+                if len(db_policies) <= 5:
+                    for p in db_policies:
+                        acts = [{"uuid": node.get("uuid", ""), "name": node.get("name", "")} for node in p.get("activityNodes", [])]
+                        policies.append({
+                            "uuid": p.get("uuid", ""),
+                            "name": p.get("name", ""),
+                            "activities": acts
+                        })
+                else:
+                    for p in db_policies:
+                        policies.append({
+                            "uuid": p.get("uuid", ""),
+                            "name": p.get("name", ""),
+                            "activities": []
+                        })
+
+            # 2. Resolve matching users/employees
+            users = []
+            db_users = list(db["users"].find())
+            for u in db_users:
+                first_name = u.get("name", "").lower()
+                last_name = u.get("lastname", "").lower()
+                if (first_name and len(first_name) > 2 and first_name in prompt_lower) or \
+                   (last_name and len(last_name) > 2 and last_name in prompt_lower):
+                    users.append({
+                        "uuid": u.get("uuid", ""),
+                        "fullName": f"{u.get('name', '')} {u.get('lastname', '')}".strip()
+                    })
+            
+            # 3. Resolve matching departments
+            departments = []
+            db_depts = list(db["departments"].find())
+            for d in db_depts:
+                dept_name = d.get("name", "").lower()
+                keywords = [w.strip(",.!?\"'") for w in dept_name.split() if len(w) > 3]
+                is_match = False
+                if not keywords:
+                    is_match = dept_name in prompt_lower
+                else:
+                    is_match = any(kw in prompt_lower for kw in keywords)
+                if is_match:
+                    departments.append({
+                        "uuid": d.get("uuid", ""),
+                        "name": d.get("name", "")
+                    })
+
+            if not departments and len(db_depts) <= 10:
+                for d in db_depts:
+                    departments.append({
+                        "uuid": d.get("uuid", ""),
+                        "name": d.get("name", "")
+                    })
+
+            ref_date = datetime.utcnow()
+            ref_date_str = ref_date.isoformat() + "Z"
+            last_month = ref_date - timedelta(days=30)
+            last_month_str = last_month.isoformat() + "Z"
+            
+            context = {
+                "system_date": ref_date_str,
+                "last_month_date": last_month_str,
+                "policies": policies,
+                "departments": departments,
+                "users": users
+            }
+            return json.dumps(context, ensure_ascii=False, indent=2)
+        except Exception as e:
+            ref_date = datetime.utcnow()
+            ref_date_str = ref_date.isoformat() + "Z"
+            last_month = ref_date - timedelta(days=30)
+            last_month_str = last_month.isoformat() + "Z"
+            return json.dumps({
+                "system_date": ref_date_str,
+                "last_month_date": last_month_str,
+                "policies": [],
+                "departments": [],
+                "users": []
+            }, ensure_ascii=False, indent=2)
+
     def compile_report(self, request: NlpCompileReportRequest) -> dict:
         prompt_lower = request.prompt.lower()
+        db_context = self._get_optimized_db_context(request.prompt)
 
-        system_prompt = """Eres un experto analista de datos de MongoDB. Convierte instrucciones en lenguaje natural (español) en especificaciones JSON para consultas de agregación MongoDB.
+        system_prompt = f"""Eres un experto analista de datos de MongoDB. Convierte instrucciones en lenguaje natural (español) en especificaciones JSON para consultas de agregación MongoDB.
+
+CONTEXTO REAL DE LA BASE DE DATOS Y TIEMPO DE REFERENCIA (ÚSALO PARA EVITAR ALUCINAR UUIDS Y LOGRAR 100% DE EXACTITUD):
+{db_context}
 
 COLECCIONES DISPONIBLES:
 1. `policy_instances`: id, uuid, policyId (ref→policies.uuid), applicantId, managerId, status ("ACTIVE"|"COMPLETED"|"CANCELLED"), currentAssigneeId, currentAssigneeRole, instanceData (object), history (array: activityNodeId, assigneeId, action, timestamp, formDataAtStep), createdAt (Date BSON), updatedAt (Date BSON).
@@ -543,40 +672,420 @@ COLECCIONES DISPONIBLES:
 4. `departments`: id, uuid, name.
 
 FORMATO DE RESPUESTA (JSON estricto, sin bloques markdown):
-{
+{{
   "title": "Título del reporte",
   "description": "Breve descripción del objetivo",
   "collection": "policy_instances",
   "pipeline": [ /* etapas: $match, $group, $project, $sort, $limit, $lookup, $unwind, $addFields */ ],
-  "columns": [ {"key": "campo_resultado", "label": "Etiqueta Español"} ],
-  "kpis": [ {"title": "Nombre", "value_key": "campo", "format": "number"} ],
-  "chart": {"type": "bar|pie", "x_key": "campo_categoría", "y_key": "campo_numérico"}
-}
+  "columns": [ {{"key": "campo_resultado", "label": "Etiqueta Español"}} ],
+  "kpis": [ {{"title": "Nombre", "value_key": "campo", "format": "number"}} ],
+  "chart": {{"type": "bar|pie", "x_key": "campo_categoría", "y_key": "campo_numérico"}}
+}}
 
-REGLAS CRÍTICAS:
-1. createdAt y updatedAt SON Date BSON nativos. Para duración usa: {"$divide": [{"$subtract": ["$updatedAt", "$createdAt"]}, 3600000]}. NUNCA uses $dateFromString.
-2. Para filtrar por política: $lookup a "policies" (localField:"policyId", foreignField:"uuid", as:"policy_info"), $unwind, y $match con $regex de subcadena SIN anclas ^ ni $ (ej: {"policy_info.name": {"$regex": "presupuesto", "$options": "i"}}).
-3. Para filtrar por departamento: $lookup a "policies" y filtrar "policy_info.lanes.name" con $regex, O $lookup a "users" + "departments" y filtrar "dept_info.name".
-4. Después de $group, los campos agrupados están en "_id". Proyéctalos desde "$_id" (si _id es string) o "$_id.campo" (si _id es objeto), NUNCA desde la raíz del documento.
-5. NO filtres por status ("COMPLETED"/"ACTIVE") a menos que el usuario lo pida explícitamente con palabras como "completados", "activos", "finalizados".
-6. "chart" es OBLIGATORIO solo si el usuario pide gráfico (barras/pastel/pie/patel). "y_key" DEBE ser numérico.
-7. Para duración de ACTIVIDADES individuales: $unwind "$history", $group por {policyId, activityNodeId}, calcular avgDurationHours con $avg, luego $lookup policies para obtener nombre de actividad con $let/$filter sobre activityNodes.
-8. Para nombre de funcionarios: $lookup a "users" (localField:"assigneeId" o "currentAssigneeId", foreignField:"uuid", as:"assignee_info"), $unwind preservando nulos, y concatenar name+lastname.
-9. Para departamento del funcionario: después del lookup de users, $lookup a "departments" (localField:"assignee_info.departmentId", foreignField:"uuid", as:"assignee_dept"), $unwind preservando nulos.
-10. NO incluyas campos técnicos como "uuid" o "id" en el reporte a menos que el usuario lo pida explícitamente. Usa siempre nombres legibles (ej. policyName, activityName).
+REGLAS CRÍTICAS DE NEGOCIO Y CONVERSIÓN:
+1. Fechas y Horas:
+   - "createdAt", "updatedAt" y "history.timestamp" son Date BSON nativos en MongoDB.
+   - NUNCA uses `$dateFromString` ni `$dateToString` para compararlas.
+   - Si el usuario pide filtrar por fechas relativas (ej. "el último mes", "los últimos 30 días"), usa el valor `last_month_date` o calcula la fecha a partir de `system_date` en formato literal y genera un filtro `$match` estándar con Extended JSON de fecha BSON: `\"createdAt\": {{"$gte": {{"$date": "YYYY-MM-DDTHH:MM:SSZ"}}}}`.
+2. Filtro de Política:
+   - Si el usuario menciona una política por su nombre (ej: "contratación de personal", "adelanto de sueldo", "vacaciones"), busca en el listado de `policies` provisto en el contexto su correspondiente `uuid`. Agrega una etapa `$match` inicial en el pipeline filtrando directamente por: `\"policyId\": \"<uuid_de_la_politica>\"`. Esto es mucho más rápido y preciso que hacer un lookup.
+3. Filtro de Funcionario (Usuario):
+   - Si el usuario menciona un funcionario por su nombre (ej: "Carlos Otsubo", "Juan Perez"), busca en la lista de `users` su `uuid`. Añade una etapa `$match` filtrando por su UUID directly (ej. `\"history.assigneeId\": \"<uuid_del_usuario>\"`).
+4. Duración de Actividades (Neto por Tarea):
+   - Para calcular la duración neta real de cada tarea en el historial (tiempo entre que se asignó y se completó), debes restar el timestamp del paso actual (`history.timestamp`) del timestamp del paso anterior. Si es el primer paso (índice 0), se resta de `createdAt`. Usa esta fórmula exacta con `$map` y `$range`:
+     {{
+       "$addFields": {{
+         "historyWithDuration": {{
+           "$map": {{
+             "input": {{"$range": [0, {{"$size": "$history"}}]}},
+             "as": "idx",
+             "in": {{
+               "activityNodeId": {{"$arrayElemAt": ["$history.activityNodeId", "$$idx"]}},
+               "assigneeId": {{"$arrayElemAt": ["$history.assigneeId", "$$idx"]}},
+               "timestamp": {{"$arrayElemAt": ["$history.timestamp", "$$idx"]}},
+               "durationHours": {{
+                 "$divide": [
+                   {{
+                     "$subtract": [
+                       {{"$arrayElemAt": ["$history.timestamp", "$$idx"]}},
+                       {{
+                         "$cond": [
+                           {{"$eq": ["$$idx", 0]}},
+                           "$createdAt",
+                           {{"$arrayElemAt": ["$history.timestamp", {{"$subtract": ["$$idx", 1]}}]}}
+                         ]
+                       }}
+                     ]
+                   }},
+                   3600000
+                 ]
+               }}
+             }}
+           }}
+         }}
+       }}
+     }}
+     Aplica esto y luego haz `{{"$unwind": "$historyWithDuration"}}`.
+5. Obtención del Nombre de la Actividad (Evitar "Desconocido" o nulos):
+   - Para obtener el nombre legible de la actividad (`activityName`) a partir del UUID (`activityNodeId`), realiza un `$lookup` a la colección `policies` usando `localField: \"policyId\"` (o la variable correspondiente) y `foreignField: \"uuid\"`, haz `$unwind` de `policy_info`, y luego proyecta `activityName` usando `$let` y `$filter` sobre `policy_info.activityNodes` comparando `$$n.uuid` con el campo `activityNodeId` agrupado, y usa `$ifNull` con fallback a "Inicio de Solicitud".
+   - NUNCA hagas lookup directo a una colección inexistente llamada 'activityNodes'.
+6. KPIs y Gráficos:
+    - "chart" es OBLIGATORIO si el usuario pide gráfico (ej: "gráfico de barras", "gráfico de pastel", "barras", "pie"). Si no se solicita, pon `chart: null`.
+    - "y_key" de chart DEBE ser numérico (ej. `avgDurationHours`).
+    - "x_key" de chart DEBE ser la categoría (ej. `activityName`).
+7. Filtro de Acción en Historial:
+   - En la base de datos, las actividades completadas se registran con el valor exacto `"COMPLETED"` en el campo `action`. Si el usuario solicita actividades "completadas" o "en completarse", usa siempre `"COMPLETED"` (en mayúsculas e inglés) en cualquier comparación de acción (ej. {{"$eq": ["$history.action", "COMPLETED"]}} o {{"history.action": "COMPLETED"}}), nunca uses "completado" o "completada".
 
-EJEMPLOS DE REFERENCIA:
+EJEMPLOS DE REFERENCIA CON CONTEXTO REAL:
 
-Prompt: "Muestra el porcentaje de solicitudes completadas vs activas en un gráfico de pastel"
-{"title":"Distribución por Estado","description":"Porcentaje de instancias por estado","collection":"policy_instances","pipeline":[{"$group":{"_id":"$status","count":{"$sum":1}}},{"$project":{"_id":0,"status":"$_id","count":"$count"}}],"columns":[{"key":"status","label":"Estado"},{"key":"count","label":"Cantidad"}],"kpis":[{"title":"Total","value_key":"count","format":"number"}],"chart":{"type":"pie","x_key":"status","y_key":"count"}}
+Prompt: "quiero un reporte de las tareas que mas se tardaron en completar el ultimo mes"
+Respuesta:
+{{
+  "title": "Tareas con Mayor Duración - Último Mes",
+  "description": "Reporte de las actividades que mayor tiempo de ejecución promedio requirieron en los últimos 30 días.",
+  "collection": "policy_instances",
+  "pipeline": [
+    {{
+      "$match": {{
+        "history.timestamp": {{
+          "$gte": {{
+            "$date": "2026-05-12T20:19:14.000Z"
+          }}
+        }}
+      }}
+    }},
+    {{
+      "$addFields": {{
+        "historyWithDuration": {{
+          "$map": {{
+            "input": {{
+              "$range": [0, {{"$size": "$history"}}]
+            }},
+            "as": "idx",
+            "in": {{
+              "activityNodeId": {{"$arrayElemAt": ["$history.activityNodeId", "$$idx"]}},
+              "assigneeId": {{"$arrayElemAt": ["$history.assigneeId", "$$idx"]}},
+              "timestamp": {{"$arrayElemAt": ["$history.timestamp", "$$idx"]}},
+              "durationHours": {{
+                "$divide": [
+                  {{
+                    "$subtract": [
+                      {{"$arrayElemAt": ["$history.timestamp", "$$idx"]}},
+                      {{
+                        "$cond": [
+                          {{"$eq": ["$$idx", 0]}},
+                          "$createdAt",
+                          {{"$arrayElemAt": ["$history.timestamp", {{"$subtract": ["$$idx", 1]}}]}}
+                        ]
+                      }}
+                    ]
+                  }},
+                  3600000
+                ]
+              }}
+            }}
+          }}
+        }}
+      }}
+    }},
+    {{
+      "$unwind": "$historyWithDuration"
+    }},
+    {{
+      "$match": {{
+        "historyWithDuration.timestamp": {{
+          "$gte": {{
+            "$date": "2026-05-12T20:19:14.000Z"
+          }}
+        }}
+      }}
+    }},
+    {{
+      "$group": {{
+        "_id": {{
+          "policyId": "$policyId",
+          "activityNodeId": "$historyWithDuration.activityNodeId"
+        }},
+        "avgDurationHours": {{
+          "$avg": "$historyWithDuration.durationHours"
+        }},
+        "assigneeId": {{
+          "$first": "$historyWithDuration.assigneeId"
+        }}
+      }}
+    }},
+    {{
+      "$lookup": {{
+        "from": "policies",
+        "localField": "_id.policyId",
+        "foreignField": "uuid",
+        "as": "policy_info"
+      }}
+    }},
+    {{
+      "$unwind": "$policy_info"
+    }},
+    {{
+      "$lookup": {{
+        "from": "users",
+        "localField": "assigneeId",
+        "foreignField": "uuid",
+        "as": "assignee_info"
+      }}
+    }},
+    {{
+      "$unwind": {{
+        "path": "$assignee_info",
+        "preserveNullAndEmptyArrays": true
+      }}
+    }},
+    {{
+      "$lookup": {{
+        "from": "departments",
+        "localField": "assignee_info.departmentId",
+        "foreignField": "uuid",
+        "as": "assignee_dept"
+      }}
+    }},
+    {{
+      "$unwind": {{
+        "path": "$assignee_dept",
+        "preserveNullAndEmptyArrays": true
+      }}
+    }},
+    {{
+      "$project": {{
+        "_id": 0,
+        "policyName": "$policy_info.name",
+        "activityName": {{
+          "$ifNull": [
+            {{
+              "$let": {{
+                "vars": {{
+                  "matchedNode": {{
+                    "$filter": {{
+                      "input": "$policy_info.activityNodes",
+                      "as": "n",
+                      "cond": {{
+                        "$eq": [
+                          "$$n.uuid",
+                          "$_id.activityNodeId"
+                        ]
+                      }}
+                    }}
+                  }}
+                }},
+                "in": {{
+                  "$arrayElemAt": [
+                    "$$matchedNode.name",
+                    0
+                  ]
+                }}
+              }}
+            }},
+            "Inicio de Solicitud"
+          ]
+        }},
+        "avgDurationHours": {{
+          "$round": [
+            "$avgDurationHours",
+            1
+          ]
+        }},
+        "funcionario": {{
+          "$concat": [
+            "$assignee_info.name",
+            " ",
+            "$assignee_info.lastname"
+          ]
+        }},
+        "departamento": "$assignee_dept.name"
+      }}
+    }},
+    {{
+      "$sort": {{
+        "avgDurationHours": -1
+      }}
+    }},
+    {{
+      "$limit": 10
+    }}
+  ],
+  "columns": [
+    {{
+      "key": "policyName",
+      "label": "Política"
+    }},
+    {{
+      "key": "activityName",
+      "label": "Actividad"
+    }},
+    {{
+      "key": "avgDurationHours",
+      "label": "Duración Promedio (Horas)"
+    }},
+    {{
+      "key": "funcionario",
+      "label": "Funcionario"
+    }},
+    {{
+      "key": "departamento",
+      "label": "Departamento"
+    }}
+  ],
+  "kpis": [
+    {{
+      "title": "Total Actividades",
+      "value_key": "count",
+      "format": "number"
+    }}
+  ],
+  "chart": null
+}}
 
-Prompt: "Muestra las instancias del departamento legal que más tardaron, top 3 en gráfico pastel"
-{"title":"Top 3 Instancias Más Lentas - Legal","description":"Instancias con mayor duración del depto Legal","collection":"policy_instances","pipeline":[{"$lookup":{"from":"policies","localField":"policyId","foreignField":"uuid","as":"policy_info"}},{"$unwind":"$policy_info"},{"$match":{"policy_info.lanes.name":{"$regex":"legal","$options":"i"}}},{"$addFields":{"durationHours":{"$divide":[{"$subtract":["$updatedAt","$createdAt"]},3600000]}}},{"$project":{"_id":0,"policyName":"$policy_info.name","durationHours":{"$round":["$durationHours",1]}}},{"$sort":{"durationHours":-1}},{"$limit":3}],"columns":[{"key":"policyName","label":"Política"},{"key":"durationHours","label":"Duración (Horas)"}],"kpis":[{"title":"Instancias","value_key":"count","format":"number"}],"chart":{"type":"pie","x_key":"policyName","y_key":"durationHours"}}
+Prompt: "Muestra un gráfico de barras del promedio de duración por actividad del flujo de contratación de personal"
+Respuesta:
+{{
+  "title": "Promedio de Duración por Actividad - Contratación de Personal",
+  "description": "Duración promedio de cada actividad dentro del flujo de Contratación de Personal.",
+  "collection": "policy_instances",
+  "pipeline": [
+    {{
+      "$match": {{
+        "policyId": "6720c739-1916-432b-b392-e698dcfd8112"
+      }}
+    }},
+    {{
+      "$addFields": {{
+        "historyWithDuration": {{
+          "$map": {{
+            "input": {{
+              "$range": [0, {{"$size": "$history"}}]
+            }},
+            "as": "idx",
+            "in": {{
+              "activityNodeId": {{"$arrayElemAt": ["$history.activityNodeId", "$$idx"]}},
+              "assigneeId": {{"$arrayElemAt": ["$history.assigneeId", "$$idx"]}},
+              "timestamp": {{"$arrayElemAt": ["$history.timestamp", "$$idx"]}},
+              "durationHours": {{
+                "$divide": [
+                  {{
+                    "$subtract": [
+                      {{"$arrayElemAt": ["$history.timestamp", "$$idx"]}},
+                      {{
+                        "$cond": [
+                          {{"$eq": ["$$idx", 0]}},
+                          "$createdAt",
+                          {{"$arrayElemAt": ["$history.timestamp", {{"$subtract": ["$$idx", 1]}}]}}
+                        ]
+                      }}
+                    ]
+                  }},
+                  3600000
+                ]
+              }}
+            }}
+          }}
+        }}
+      }}
+    }},
+    {{
+      "$unwind": "$historyWithDuration"
+    }},
+    {{
+      "$group": {{
+        "_id": {{
+          "policyId": "$policyId",
+          "activityNodeId": "$historyWithDuration.activityNodeId"
+        }},
+        "avgDurationHours": {{
+          "$avg": "$historyWithDuration.durationHours"
+        }}
+      }}
+    }},
+    {{
+      "$lookup": {{
+        "from": "policies",
+        "localField": "_id.policyId",
+        "foreignField": "uuid",
+        "as": "policy_info"
+      }}
+    }},
+    {{
+      "$unwind": "$policy_info"
+    }},
+    {{
+      "$project": {{
+        "_id": 0,
+        "activityName": {{
+          "$ifNull": [
+            {{
+              "$let": {{
+                "vars": {{
+                  "matchedNode": {{
+                    "$filter": {{
+                      "input": "$policy_info.activityNodes",
+                      "as": "n",
+                      "cond": {{
+                        "$eq": [
+                          "$$n.uuid",
+                          "$_id.activityNodeId"
+                        ]
+                      }}
+                    }}
+                  }}
+                }},
+                "in": {{
+                  "$arrayElemAt": [
+                    "$$matchedNode.name",
+                    0
+                  ]
+                }}
+              }}
+            }},
+            "Inicio de Solicitud"
+          ]
+        }},
+        "avgDurationHours": {{
+          "$round": [
+            "$avgDurationHours",
+            1
+          ]
+        }}
+      }}
+    }},
+    {{
+      "$sort": {{
+        "avgDurationHours": -1
+      }}
+    }}
+  ],
+  "columns": [
+    {{
+      "key": "activityName",
+      "label": "Actividad"
+    }},
+    {{
+      "key": "avgDurationHours",
+      "label": "Duración Promedio (Horas)"
+    }}
+  ],
+  "kpis": [
+    {{
+      "title": "Actividades",
+      "value_key": "count",
+      "format": "number"
+    }}
+  ],
+  "chart": {{
+    "type": "bar",
+    "x_key": "activityName",
+    "y_key": "avgDurationHours"
+  }}
+}}
 
-Prompt: "Top 10 actividades que más tardan con nombre de funcionarios y departamento"
-{"title":"Top 10 Actividades Más Lentas","description":"Actividades con mayor duración promedio","collection":"policy_instances","pipeline":[{"$match":{"history.0":{"$exists":true}}},{"$unwind":"$history"},{"$group":{"_id":{"policyId":"$policyId","activityNodeId":"$history.activityNodeId"},"avgDurationHours":{"$avg":{"$divide":[{"$subtract":["$history.timestamp","$createdAt"]},3600000]}},"assigneeId":{"$first":"$history.assigneeId"}}},{"$lookup":{"from":"policies","localField":"_id.policyId","foreignField":"uuid","as":"policy_info"}},{"$unwind":"$policy_info"},{"$lookup":{"from":"users","localField":"assigneeId","foreignField":"uuid","as":"assignee_info"}},{"$unwind":{"path":"$assignee_info","preserveNullAndEmptyArrays":true}},{"$lookup":{"from":"departments","localField":"assignee_info.departmentId","foreignField":"uuid","as":"assignee_dept"}},{"$unwind":{"path":"$assignee_dept","preserveNullAndEmptyArrays":true}},{"$project":{"_id":0,"policyName":"$policy_info.name","activityName":{"$let":{"vars":{"matchedNode":{"$filter":{"input":"$policy_info.activityNodes","as":"n","cond":{"$eq":["$$n.uuid","$_id.activityNodeId"]}}}},"in":{"$arrayElemAt":["$$matchedNode.name",0]}}},"avgDurationHours":{"$round":["$avgDurationHours",1]},"funcionario":{"$concat":["$assignee_info.name"," ","$assignee_info.lastname"]},"departamento":"$assignee_dept.name"}},{"$sort":{"avgDurationHours":-1}},{"$limit":10}],"columns":[{"key":"policyName","label":"Política"},{"key":"activityName","label":"Actividad"},{"key":"avgDurationHours","label":"Duración Promedio (Horas)"},{"key":"funcionario","label":"Funcionario"},{"key":"departamento","label":"Departamento"}],"kpis":[{"title":"Actividades","value_key":"count","format":"number"}],"chart":null}
-
-Devuelve ÚNICAMENTE el JSON."""
+Devuelve ÚNICAMENTE el JSON.
+"""
 
         try:
             user_content = request.prompt
@@ -679,6 +1188,7 @@ Devuelve ÚNICAMENTE el JSON."""
                 result["pipeline"] = self._sanitize_pipeline(new_pipeline)
 
             self._process_regex_recursive(result)
+            self._normalize_completed_actions(result)
 
             chart_keywords = ["grafic", "gráfi", "barra", "pastel", "patel", "pie", "chart", "plot", "dibuj", "visualiz"]
             has_chart_intent = any(k in prompt_lower for k in chart_keywords)
@@ -700,8 +1210,13 @@ Devuelve ÚNICAMENTE el JSON."""
         sanitized = []
         for stage in pipeline:
             if isinstance(stage, dict):
-                # Filter out unsupported operations
-                clean_stage = {k: v for k, v in stage.items() if k in valid_stages}
+                clean_stage = {}
+                for k, v in stage.items():
+                    # Autocorrect missing $
+                    if not k.startswith("$") and f"${k}" in valid_stages:
+                        k = f"${k}"
+                    if k in valid_stages:
+                        clean_stage[k] = v
                 if clean_stage:
                     sanitized.append(clean_stage)
         return sanitized
@@ -781,6 +1296,34 @@ Devuelve ÚNICAMENTE el JSON."""
         elif isinstance(obj, list):
             for item in obj:
                 self._process_regex_recursive(item)
+
+    def _normalize_completed_actions(self, obj):
+        if isinstance(obj, dict):
+            for k, v in list(obj.items()):
+                if "action" in k.lower():
+                    if isinstance(v, str) and v.lower() in ("completado", "completada", "completed", "completado/a"):
+                        obj[k] = "COMPLETED"
+                    elif isinstance(v, list):
+                        obj[k] = [
+                            "COMPLETED" if (isinstance(item, str) and item.lower() in ("completado", "completada", "completed", "completado/a"))
+                            else item for item in v
+                        ]
+                if k in ("$eq", "$ne", "$in", "$nin") and isinstance(v, list):
+                    has_action = any(isinstance(x, str) and "action" in x.lower() for x in v)
+                    if has_action:
+                        obj[k] = [
+                            "COMPLETED" if (isinstance(x, str) and x.lower() in ("completado", "completada", "completed", "completado/a"))
+                            else x for x in v
+                        ]
+                self._normalize_completed_actions(v)
+        elif isinstance(obj, list):
+            has_action = any(isinstance(x, str) and "action" in x.lower() for x in obj)
+            if has_action:
+                for idx, x in enumerate(obj):
+                    if isinstance(x, str) and x.lower() in ("completado", "completada", "completed", "completado/a"):
+                        obj[idx] = "COMPLETED"
+            for item in obj:
+                self._normalize_completed_actions(item)
 
     def _fix_json_typos(self, text: str) -> str:
         # 1. Remove unnecessary and invalid $dateFromString wrappers on BSON Dates

@@ -185,5 +185,5 @@ public class NlpQueryCompilerService {
             System.err.println("Error al ejecutar agregación dinámica en MongoDB: " + e.getMessage());
             return e.getMessage();
         }
-    }
+     }
 }

@@ -1218,18 +1218,20 @@ export class PolicyDesignerComponent implements OnInit {
       const dy = to.y - f.y;
       const offsetX = t.cpOffsetX ?? 0;
       const offsetY = t.cpOffsetY ?? 0;
-      let cp1x: number, cp1y: number, cp2x: number, cp2y: number;
+      
+      let path: string;
+      let midX: number;
+      let midY: number;
       if (Math.abs(dy) >= Math.abs(dx)) {
-        cp1x = f.x + offsetX; cp1y = f.y + dy * 0.4 + offsetY;
-        cp2x = to.x + offsetX; cp2y = to.y - dy * 0.4 + offsetY;
+        midY = f.y + dy * 0.5 + offsetY;
+        midX = (f.x + to.x) / 2;
+        path = `M ${f.x},${f.y} L ${f.x},${midY} L ${to.x},${midY} L ${to.x},${to.y}`;
       } else {
-        cp1x = f.x + dx * 0.4 + offsetX; cp1y = f.y + offsetY;
-        cp2x = to.x - dx * 0.4 + offsetX; cp2y = to.y + offsetY;
+        midX = f.x + dx * 0.5 + offsetX;
+        midY = (f.y + to.y) / 2;
+        path = `M ${f.x},${f.y} L ${midX},${f.y} L ${midX},${to.y} L ${to.x},${to.y}`;
       }
-      const path = 'M' + f.x + ',' + f.y + ' C' + cp1x + ',' + cp1y + ' ' + cp2x + ',' + cp2y + ' ' + to.x + ',' + to.y;
-      // Bezier midpoint at t=0.5: B(0.5) = (1/8)(P0+P3) + (3/8)(P1+P2)
-      const midX = 0.125 * (f.x + to.x) + 0.375 * (cp1x + cp2x);
-      const midY = 0.125 * (f.y + to.y) + 0.375 * (cp1y + cp2y);
+
       // Auto-dashed when connecting to/from OBJECT or SIGNAL nodes (UML object flow)
       const objectFlowStates = ['OBJECT', 'SIGNAL'];
       const autoDashed = !!(src && objectFlowStates.includes(src.state)) || !!(tgt && objectFlowStates.includes(tgt.state));
